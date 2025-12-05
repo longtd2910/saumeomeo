@@ -16,4 +16,4 @@ async def init():
 
 if __name__ == '__main__':
     asyncio.run(init())
-    bot.run(os.getenv('API_KEY'))
+    bot.run(os.getenv('DISCORD_API_KEY'))

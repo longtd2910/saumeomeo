@@ -1,11 +1,15 @@
-FROM python:3.9.18-slim-bullseye
+FROM python:3.10-slim
 
 WORKDIR /app
 
 ENV LANG C.UTF-8
 ENV LC_ALL C.UTF-8
 
-RUN pip install discord PyNaCl yt_dlp
+RUN pip install discord
+RUN pip install PyNaCl
+RUN pip install -U yt_dlp
+RUN pip install python-dotenv
+
 RUN apt-get update && apt-get install -y ffmpeg
 
 COPY . /app/
