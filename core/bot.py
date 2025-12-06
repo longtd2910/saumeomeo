@@ -111,13 +111,13 @@ class MusicBot(commands.Cog):
             await ctx.message.author.voice.channel.connect()
 
     async def __resolve_link(self, voice_id, link):
-        """Classify a link. Return a discord.PCMVolumeTransformer object"""
+        """Classify a link. Return a list of discord.PCMVolumeTransformer objects"""
         if voice_id not in self.queue_dict:
             self.queue_dict[voice_id] = []
 
         songs = await YoutubeDLAudioSource.from_url(validate_url(link), loop=self.bot.loop, stream=False)
         self.queue_dict[voice_id] += songs
-        return len(songs)
+        return songs
 
     async def __play_next(self, ctx):
         if len(self.queue_dict[ctx.message.guild.id]) == 0:
@@ -204,11 +204,17 @@ class MusicBot(commands.Cog):
         if guild_id in self.idle_start_time:
             del self.idle_start_time[guild_id]
         
-        if len(self.queue_dict[server_id]) - songs + 1 if ctx.voice_client.is_playing() else 0 > 0:
-            if songs == 1:
-                await ctx.send(embed=discord.Embed(description=f"Đã thêm **{self.queue_dict[server_id][-1].data['title']}**"))
+        songs_count = len(songs)
+        if len(self.queue_dict[server_id]) - songs_count + 1 if ctx.voice_client.is_playing() else 0 > 0:
+            if songs_count == 1:
+                await ctx.send(embed=discord.Embed(description=f"Đã thêm **{songs[0].data['title']}**"))
             else:
-                await ctx.send(embed=discord.Embed(description=f"Đã thêm {songs} bài hát vào hàng chờ"))
+                tracks_list = "\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(songs)])
+                embed = discord.Embed(
+                    title=f"Đã thêm {songs_count} bài hát vào hàng chờ",
+                    description=tracks_list
+                )
+                await ctx.send(embed=embed)
             menu, embed = await self.__construct_queue_menu(ctx)
             await ctx.send(embed=embed, view=menu)
 
