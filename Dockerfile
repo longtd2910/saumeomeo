@@ -10,7 +10,7 @@ RUN pip install PyNaCl
 RUN pip install -U yt_dlp
 RUN pip install python-dotenv
 
-RUN apt-get update && apt-get install -y ffmpeg
+RUN apt-get update && apt-get install -y ffmpeg nodejs npm && rm -rf /var/lib/apt/lists/*
 
 COPY . /app/
 

@@ -87,7 +87,9 @@ class MusicBot(commands.Cog):
         self.pause_start_time: defaultdict = {}
         self.total_paused_time: defaultdict = {}
         self.player_messages: defaultdict = {}
+        self.idle_start_time: defaultdict = {}
         self.update_player_task.start()
+        self.idle_check_task.start()
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -95,6 +97,7 @@ class MusicBot(commands.Cog):
 
     def cog_unload(self):
         self.update_player_task.cancel()
+        self.idle_check_task.cancel()
 
     async def join(self, ctx):
         if not ctx.message.author.voice:
@@ -118,7 +121,14 @@ class MusicBot(commands.Cog):
 
     async def __play_next(self, ctx):
         if len(self.queue_dict[ctx.message.guild.id]) == 0:
+            guild_id = ctx.message.guild.id
+            if ctx.voice_client and not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused():
+                self.idle_start_time[guild_id] = time.time()
             return
+        
+        guild_id = ctx.message.guild.id
+        if guild_id in self.idle_start_time:
+            del self.idle_start_time[guild_id]
         
         song = self.queue_dict[ctx.message.guild.id].pop(0)
 
@@ -140,7 +150,6 @@ class MusicBot(commands.Cog):
             except:
                 pass
 
-        guild_id = ctx.message.guild.id
         self.playback_start_time[guild_id] = time.time()
         self.total_paused_time[guild_id] = 0
         if guild_id in self.pause_start_time:
@@ -190,6 +199,10 @@ class MusicBot(commands.Cog):
 
         await self.join(ctx=ctx)
         songs = await self.__resolve_link(ctx.message.guild.id, url)
+        
+        guild_id = ctx.message.guild.id
+        if guild_id in self.idle_start_time:
+            del self.idle_start_time[guild_id]
         
         if len(self.queue_dict[server_id]) - songs + 1 if ctx.voice_client.is_playing() else 0 > 0:
             if songs == 1:
@@ -354,6 +367,46 @@ class MusicBot(commands.Cog):
 
     @update_player_task.before_loop
     async def before_update_player_task(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=30.0)
+    async def idle_check_task(self):
+        current_time = time.time()
+        for guild_id in list(self.idle_start_time.keys()):
+            try:
+                guild = self.bot.get_guild(guild_id)
+                if not guild:
+                    if guild_id in self.idle_start_time:
+                        del self.idle_start_time[guild_id]
+                    continue
+                
+                voice_client = guild.voice_client
+                if not voice_client:
+                    if guild_id in self.idle_start_time:
+                        del self.idle_start_time[guild_id]
+                    continue
+                
+                queue = self.queue_dict.get(guild_id, [])
+                is_playing = voice_client.is_playing() or voice_client.is_paused()
+                
+                if is_playing or len(queue) > 0:
+                    if guild_id in self.idle_start_time:
+                        del self.idle_start_time[guild_id]
+                    continue
+                
+                idle_duration = current_time - self.idle_start_time[guild_id]
+                if idle_duration >= 180:
+                    await voice_client.disconnect()
+                    if guild_id in self.idle_start_time:
+                        del self.idle_start_time[guild_id]
+                    logger.debug(construct_log(f"Disconnected from voice channel in guild {guild_id} after 3 minutes of idle"))
+            except Exception as e:
+                logger.error(construct_log(f"Error in idle check for guild {guild_id}: {e}"))
+                if guild_id in self.idle_start_time:
+                    del self.idle_start_time[guild_id]
+
+    @idle_check_task.before_loop
+    async def before_idle_check_task(self):
         await self.bot.wait_until_ready()
 
     @commands.command(name='player', help='Hiển thị player với progress và danh sách chờ')
