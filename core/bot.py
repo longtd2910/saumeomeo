@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 
 from .audio import YoutubeDLAudioSource
 from .utils import construct_log, validate_url, parse_duration, create_progress_bar, format_duration
+from .database import PlaylistDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -88,16 +89,23 @@ class MusicBot(commands.Cog):
         self.total_paused_time: defaultdict = {}
         self.player_messages: defaultdict = {}
         self.idle_start_time: defaultdict = {}
+        self.db = PlaylistDatabase()
         self.update_player_task.start()
         self.idle_check_task.start()
 
     @commands.Cog.listener()
     async def on_ready(self):
+        try:
+            await self.db.connect()
+        except Exception as e:
+            logger.error(f"Database connection failed: {e}. Playlist features will be unavailable.")
         logger.debug(construct_log(f'{self.bot.user} has connected to Discord!'))
 
     def cog_unload(self):
         self.update_player_task.cancel()
         self.idle_check_task.cancel()
+        if self.bot.loop and not self.bot.loop.is_closed():
+            asyncio.run_coroutine_threadsafe(self.db.close(), self.bot.loop)
 
     async def join(self, ctx):
         if not ctx.message.author.voice:
@@ -132,12 +140,26 @@ class MusicBot(commands.Cog):
         
         song = self.queue_dict[ctx.message.guild.id].pop(0)
 
-        view, embed = await self.__construct_media_buttons(ctx, song.data)
+        self.playback_start_time[guild_id] = time.time()
+        self.total_paused_time[guild_id] = 0
+        if guild_id in self.pause_start_time:
+            del self.pause_start_time[guild_id]
+        
+        embed = await self.__construct_player_embed(ctx, song=song)
+        view = PlayerView(self, ctx)
+        
+        for item in view.children:
+            if isinstance(item, discord.ui.Button) and item.emoji in ['⏸️', '▶️']:
+                if ctx.voice_client and ctx.voice_client.is_paused():
+                    item.emoji = '▶️'
+                else:
+                    item.emoji = '⏸️'
 
-        await ctx.send(
-            embed = embed,
-            view=view
-        )
+        message = await ctx.send(embed=embed, view=view)
+        self.player_messages[guild_id] = {
+            'message': message,
+            'context': ctx
+        }
 
         def after_play(error):
             guild_id = ctx.message.guild.id
@@ -150,10 +172,6 @@ class MusicBot(commands.Cog):
             except:
                 pass
 
-        self.playback_start_time[guild_id] = time.time()
-        self.total_paused_time[guild_id] = 0
-        if guild_id in self.pause_start_time:
-            del self.pause_start_time[guild_id]
         ctx.voice_client.play(song, after=after_play)
 
     async def __construct_media_buttons(self, ctx, metadata):
@@ -198,7 +216,32 @@ class MusicBot(commands.Cog):
             return
 
         await self.join(ctx=ctx)
-        songs = await self.__resolve_link(ctx.message.guild.id, url)
+        
+        if url.lower() in ['personal', 'playlist']:
+            if not self.db.pool:
+                await ctx.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
+                return
+            
+            user_id = ctx.message.author.id
+            playlist_urls = await self.db.get_playlist_urls(user_id)
+            if not playlist_urls:
+                await ctx.send(embed=discord.Embed(description="Playlist của bạn trống"))
+                return
+            
+            songs = []
+            for playlist_url in playlist_urls:
+                try:
+                    resolved_songs = await self.__resolve_link(ctx.message.guild.id, playlist_url)
+                    songs.extend(resolved_songs)
+                except Exception as e:
+                    logger.error(f"Error resolving playlist URL {playlist_url}: {e}")
+                    continue
+            
+            if not songs:
+                await ctx.send(embed=discord.Embed(description="Không thể tải bài hát từ playlist"))
+                return
+        else:
+            songs = await self.__resolve_link(ctx.message.guild.id, url)
         
         guild_id = ctx.message.guild.id
         if guild_id in self.idle_start_time:
@@ -287,19 +330,21 @@ class MusicBot(commands.Cog):
         else:
             await ctx.send(embed=discord.Embed(description="Có đang hát đéo đâu mà stop?"))
 
-    async def __construct_player_embed(self, ctx):
+    async def __construct_player_embed(self, ctx, song=None):
         embed = discord.Embed(title="🎵 Player", color=discord.Color.blue())
         
-        if not ctx.voice_client or not ctx.voice_client.is_playing() and not ctx.voice_client.is_paused():
+        if song:
+            metadata = song.data
+        elif ctx.voice_client and (ctx.voice_client.is_playing() or ctx.voice_client.is_paused()):
+            current_source = ctx.voice_client.source
+            if not hasattr(current_source, 'data'):
+                embed.description = "Không thể lấy thông tin bài hát"
+                return embed
+            metadata = current_source.data
+        else:
             embed.description = "Không có bài hát nào đang phát"
             return embed
 
-        current_source = ctx.voice_client.source
-        if not hasattr(current_source, 'data'):
-            embed.description = "Không thể lấy thông tin bài hát"
-            return embed
-
-        metadata = current_source.data
         title = metadata.get('title', 'Unknown')
         duration_str = metadata.get('duration', '00:00')
         total_seconds = parse_duration(duration_str)
@@ -309,7 +354,7 @@ class MusicBot(commands.Cog):
             base_elapsed = time.time() - self.playback_start_time[guild_id]
             total_paused = self.total_paused_time.get(guild_id, 0)
             
-            if ctx.voice_client.is_paused() and guild_id in self.pause_start_time:
+            if ctx.voice_client and ctx.voice_client.is_paused() and guild_id in self.pause_start_time:
                 current_pause_duration = time.time() - self.pause_start_time[guild_id]
                 total_paused += current_pause_duration
             
@@ -323,7 +368,7 @@ class MusicBot(commands.Cog):
         elapsed_str = format_duration(elapsed) if elapsed >= 0 else "00:00"
         progress_bar = create_progress_bar(elapsed, total_seconds)
         
-        status_emoji = "⏸️" if ctx.voice_client.is_paused() else "▶️"
+        status_emoji = "⏸️" if (ctx.voice_client and ctx.voice_client.is_paused()) else "▶️"
         
         description_parts = [
             f"{status_emoji}\t{title}",
@@ -436,3 +481,83 @@ class MusicBot(commands.Cog):
             'message': message,
             'context': ctx
         }
+
+    @commands.command(name='playlist', help='Xem playlist cá nhân')
+    async def commands_playlist(self, ctx):
+        """View user's personal playlist"""
+        if not self.db.pool:
+            await ctx.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
+            return
+        
+        user_id = ctx.message.author.id
+        playlist = await self.db.get_playlist(user_id)
+        
+        if not playlist:
+            await ctx.send(embed=discord.Embed(description="Playlist của bạn trống"))
+            return
+        
+        embed = discord.Embed(title="📋 Playlist cá nhân")
+        tracks_list = "\n".join([f"{i+1}. {item.get('title', 'Unknown')} - {item.get('url', '')}" for i, item in enumerate(playlist)])
+        embed.description = tracks_list
+        await ctx.send(embed=embed)
+
+    @commands.command(name='add', help='Thêm bài hát vào playlist')
+    async def commands_add(self, ctx, *, url):
+        """Add a song to user's personal playlist"""
+        if not self.db.pool:
+            await ctx.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
+            return
+        
+        if not url:
+            await ctx.send(embed=discord.Embed(description="Cần cung cấp URL hoặc tên bài hát"))
+            return
+        
+        user_id = ctx.message.author.id
+        validated_url = validate_url(url)
+        
+        try:
+            songs = await YoutubeDLAudioSource.from_url(validated_url, loop=self.bot.loop, stream=False)
+            if not songs:
+                await ctx.send(embed=discord.Embed(description="Không tìm thấy bài hát"))
+                return
+            
+            song_title = songs[0].data.get('title', 'Unknown') if songs else 'Unknown'
+            if len(songs) > 1:
+                song_title = f"{song_title} (và {len(songs) - 1} bài khác)"
+            
+            success = await self.db.add_song(user_id, validated_url, song_title)
+            
+            if success:
+                if len(songs) == 1:
+                    await ctx.send(embed=discord.Embed(description=f"Đã thêm **{songs[0].data['title']}** vào playlist"))
+                else:
+                    await ctx.send(embed=discord.Embed(description=f"Đã thêm playlist ({len(songs)} bài hát) vào playlist cá nhân"))
+            else:
+                await ctx.send(embed=discord.Embed(description="Bài hát đã có trong playlist"))
+        except Exception as e:
+            logger.error(f"Error adding song to playlist: {e}")
+            await ctx.send(embed=discord.Embed(description="Lỗi khi thêm bài hát vào playlist"))
+
+    @commands.command(name='remove', help='Xóa bài hát khỏi playlist')
+    async def commands_remove(self, ctx, *, identifier):
+        """Remove a song from user's personal playlist"""
+        if not self.db.pool:
+            await ctx.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
+            return
+        
+        if not identifier:
+            await ctx.send(embed=discord.Embed(description="Cần cung cấp số thứ tự, URL hoặc tên bài hát"))
+            return
+        
+        user_id = ctx.message.author.id
+        success = await self.db.remove_song(user_id, identifier)
+        
+        if success:
+            await ctx.send(embed=discord.Embed(description="Đã xóa bài hát khỏi playlist"))
+        else:
+            await ctx.send(embed=discord.Embed(description="Không tìm thấy bài hát trong playlist"))
+
+    @commands.command(name='play-playlist', help='Phát playlist cá nhân')
+    async def commands_play_playlist(self, ctx):
+        """Play user's personal playlist"""
+        await self.commands_play(ctx, url="personal")

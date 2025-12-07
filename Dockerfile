@@ -9,6 +9,7 @@ RUN pip install discord
 RUN pip install PyNaCl
 RUN pip install -U yt_dlp
 RUN pip install python-dotenv
+RUN pip install asyncpg
 
 RUN apt-get update && apt-get install -y ffmpeg nodejs npm && rm -rf /var/lib/apt/lists/*
 

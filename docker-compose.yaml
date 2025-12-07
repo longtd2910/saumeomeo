@@ -6,3 +6,21 @@ services:
       - .env
     environment:
       - DISCORD_API_KEY=${DISCORD_API_KEY}
+      - DATABASE_URL=postgresql://playlist_user:playlist_pass@postgres:5432/playlist_db
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:latest
+    restart: always
+    environment:
+      - POSTGRES_USER=playlist_user
+      - POSTGRES_PASSWORD=playlist_pass
+      - POSTGRES_DB=playlist_db
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
