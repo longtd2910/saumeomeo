@@ -49,6 +49,39 @@ class PlaylistDatabase:
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_user_id ON playlists(user_id)
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS versions (
+                    id SERIAL PRIMARY KEY,
+                    version TEXT NOT NULL,
+                    release_note TEXT NOT NULL,
+                    announced BOOLEAN DEFAULT FALSE
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS guilds (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT NOT NULL UNIQUE,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_guild_id ON guilds(guild_id)
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS play_log (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT NOT NULL,
+                    url TEXT NOT NULL,
+                    title TEXT,
+                    played_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_play_log_guild_id ON play_log(guild_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_play_log_played_at ON play_log(played_at)
+            """)
 
     async def add_song(self, user_id: int, url: str, title: Optional[str] = None) -> bool:
         if not self.pool:
@@ -126,4 +159,148 @@ class PlaylistDatabase:
                 return [row['url'] for row in rows]
         except Exception as e:
             logger.error(f"Error getting playlist URLs: {e}")
+            return []
+
+    async def get_latest_version(self) -> Optional[str]:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return None
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT version
+                    FROM versions
+                    ORDER BY id DESC
+                    LIMIT 1
+                """)
+                return row['version'] if row else None
+        except Exception as e:
+            logger.error(f"Error getting latest version: {e}")
+            return None
+
+    async def add_version(self, version: str, release_note: str) -> bool:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO versions (version, release_note, announced)
+                    VALUES ($1, $2, FALSE)
+                """, version, release_note)
+                return True
+        except Exception as e:
+            logger.error(f"Error adding version: {e}")
+            return False
+
+    async def add_guild(self, guild_id: int) -> bool:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO guilds (guild_id)
+                    VALUES ($1)
+                    ON CONFLICT (guild_id) DO NOTHING
+                """, guild_id)
+                return True
+        except Exception as e:
+            logger.error(f"Error adding guild: {e}")
+            return False
+
+    async def get_all_guilds(self) -> List[int]:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT guild_id
+                    FROM guilds
+                """)
+                return [row['guild_id'] for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting all guilds: {e}")
+            return []
+
+    async def is_version_announced(self, version: str) -> bool:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT announced
+                    FROM versions
+                    WHERE version = $1
+                """, version)
+                return row['announced'] if row else False
+        except Exception as e:
+            logger.error(f"Error checking version announcement status: {e}")
+            return False
+
+    async def mark_version_announced(self, version: str) -> bool:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE versions
+                    SET announced = TRUE
+                    WHERE version = $1
+                """, version)
+                return True
+        except Exception as e:
+            logger.error(f"Error marking version as announced: {e}")
+            return False
+
+    async def get_version_release_note(self, version: str) -> Optional[str]:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return None
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT release_note
+                    FROM versions
+                    WHERE version = $1
+                """, version)
+                return row['release_note'] if row else None
+        except Exception as e:
+            logger.error(f"Error getting version release note: {e}")
+            return None
+
+    async def log_played_url(self, guild_id: int, url: str, title: Optional[str] = None) -> bool:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO play_log (guild_id, url, title)
+                    VALUES ($1, $2, $3)
+                """, guild_id, url, title)
+                return True
+        except Exception as e:
+            logger.error(f"Error logging played URL: {e}")
+            return False
+
+    async def get_random_urls_from_history(self, guild_id: int, count: int = 1) -> List[Dict]:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT DISTINCT url, title
+                    FROM play_log
+                    WHERE guild_id = $1
+                    ORDER BY RANDOM()
+                    LIMIT $2
+                """, guild_id, count)
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting random URLs from history: {e}")
             return []

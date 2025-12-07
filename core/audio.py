@@ -75,18 +75,22 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
                                     break
                         if not stream_url:
                             continue
-                        results.append(
-                            self(
-                                discord.FFmpegPCMAudio(
-                                    stream_url,
-                                    **ffmpeg_options
-                                ),
-                                data={
-                                    'title': entry.get('title', 'No title'),
-                                    'duration': format_duration(entry.get('duration', 0))
-                                }
-                            )
+                        entry_url = entry.get('webpage_url') or entry.get('original_url') or url
+                        if not entry_url or entry_url.startswith('ytsearch:'):
+                            entry_url = entry.get('webpage_url') or url
+                        audio_source = self(
+                            discord.FFmpegPCMAudio(
+                                stream_url,
+                                **ffmpeg_options
+                            ),
+                            data={
+                                'title': entry.get('title', 'No title'),
+                                'duration': format_duration(entry.get('duration', 0)),
+                                'url': entry_url
+                            }
                         )
+                        audio_source.url = entry_url
+                        results.append(audio_source)
                     if results:
                         return results
                 except (json.JSONDecodeError, KeyError) as e:
