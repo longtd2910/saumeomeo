@@ -147,9 +147,27 @@ class MusicBot(commands.Cog):
                 await self.db.mark_version_announced(version)
                 logger.debug(construct_log(f'Marked version {version} as announced'))
         
+        await asyncio.sleep(1)
+        
         try:
+            all_commands = [cmd.name for cmd in self.bot.tree.get_commands()]
+            logger.debug(construct_log(f'Commands in tree before sync: {", ".join(all_commands)}'))
+            if 'random' not in all_commands:
+                logger.warning(construct_log('WARNING: /random command not found in command tree before sync!'))
+                for cmd in self.bot.tree.get_commands():
+                    if hasattr(cmd, 'name'):
+                        logger.debug(construct_log(f'Found command: {cmd.name}'))
+            
             synced = await self.bot.tree.sync()
-            logger.debug(construct_log(f'Synced {len(synced)} command(s)'))
+            synced_names = [cmd.name for cmd in synced]
+            logger.debug(construct_log(f'Synced {len(synced)} command(s): {", ".join(synced_names)}'))
+            if 'random' not in synced_names:
+                logger.warning(construct_log('WARNING: /random command was not synced!'))
+                logger.warning(construct_log('Attempting to force sync all commands...'))
+                try:
+                    await self.bot.tree.sync()
+                except Exception as sync_error:
+                    logger.error(construct_log(f'Force sync failed: {sync_error}'))
         except Exception as e:
             logger.error(construct_log(f'Failed to sync commands: {e}'))
 

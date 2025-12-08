@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 from core.bot import MusicBot
 from core.database import PlaylistDatabase
 
-VERSION = "1.0.7"
-CHANGE_NOTE = "- Thêm /random <số lượng (optional)>: phát một bài ngẫu nhiên từ lịch sử\n- Chuẩn bị thu tiền mỗi thằng 5k/bài"
+VERSION = "1.0.8"
+CHANGE_NOTE = "- Fix lỗi khi phát bài hát từ lịch sử"
 
 load_dotenv()
 

@@ -294,9 +294,12 @@ class PlaylistDatabase:
         try:
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch("""
-                    SELECT DISTINCT url, title
-                    FROM play_log
-                    WHERE guild_id = $1
+                    SELECT url, title
+                    FROM (
+                        SELECT DISTINCT url, title
+                        FROM play_log
+                        WHERE guild_id = $1
+                    ) AS distinct_urls
                     ORDER BY RANDOM()
                     LIMIT $2
                 """, guild_id, count)
