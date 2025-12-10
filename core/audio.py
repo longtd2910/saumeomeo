@@ -28,10 +28,6 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
     async def from_url(self, url, *, loop=None, stream=False):
         command = ["yt-dlp"]
         
-        # cookies_path = "cookies/youtube.txt"
-        # if self._is_youtube_url(url) and os.path.exists(cookies_path):
-        #     command.extend(["--cookies", cookies_path])
-        
         if self._is_youtube_url(url):
             command.extend(["--remote-components", "ejs:npm"])
         

@@ -769,7 +769,7 @@ class MusicBot(commands.Cog):
     @app_commands.command(name='play-playlist', description='Phát playlist cá nhân')
     async def commands_play_playlist(self, interaction: discord.Interaction):
         """Play user's personal playlist"""
-        await self.commands_play(interaction, url="personal")
+        await self.commands_play.callback(self, interaction, url="personal")
 
     @app_commands.command(name='random', description='Phát bài hát ngẫu nhiên từ lịch sử của server')
     @app_commands.describe(number_of_urls='Số lượng bài hát muốn phát (mặc định: 1)')
