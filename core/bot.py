@@ -263,16 +263,23 @@ class MusicBot(commands.Cog):
                 else:
                     item.emoji = '⏸️'
 
-        message = await interaction.followup.send(embed=embed, view=view)
-        self.player_messages[guild_id] = {
-            'message': message,
-            'interaction': interaction
-        }
+        target_channel = channel or getattr(interaction, 'channel', None)
+        message = None
+        try:
+            message = await interaction.followup.send(embed=embed, view=view)
+        except Exception:
+            if target_channel:
+                message = await target_channel.send(embed=embed, view=view)
+        if message:
+            self.player_messages[guild_id] = {
+                'message': message,
+                'interaction': interaction
+            }
 
         def after_play(error):
             if guild_id in self.player_messages:
                 del self.player_messages[guild_id]
-            coro = self.__play_next(interaction, channel)
+            coro = self.__play_next(interaction, channel or getattr(interaction, 'channel', None))
             fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
             try:
                 fut.result()
@@ -406,11 +413,10 @@ class MusicBot(commands.Cog):
         
         voice_client = guild.voice_client
         if voice_client and voice_client.is_playing():
-            voice_client.stop()
             server_id = guild.id
-            if len(self.queue_dict.get(server_id, [])) > 0:
-                await self.__play_next(interaction)
-            else:
+            has_next = len(self.queue_dict.get(server_id, [])) > 0
+            voice_client.stop()
+            if not has_next:
                 await interaction.followup.send(embed=discord.Embed(description="Hết mẹ bài hát rồi còn đâu"))
         else:
             await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà skip?"))
