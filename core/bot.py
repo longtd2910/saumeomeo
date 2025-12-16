@@ -234,6 +234,8 @@ class MusicBot(commands.Cog):
             voice_client = guild.voice_client
             if voice_client and not voice_client.is_playing() and not voice_client.is_paused():
                 self.idle_start_time[guild_id] = time.time()
+            if guild_id in self.player_messages:
+                del self.player_messages[guild_id]
             return
         
         if guild_id in self.idle_start_time:
@@ -265,20 +267,35 @@ class MusicBot(commands.Cog):
 
         target_channel = channel or getattr(interaction, 'channel', None)
         message = None
-        try:
-            message = await interaction.followup.send(embed=embed, view=view)
-        except Exception:
-            if target_channel:
-                message = await target_channel.send(embed=embed, view=view)
-        if message:
-            self.player_messages[guild_id] = {
-                'message': message,
-                'interaction': interaction
-            }
+        
+        if guild_id in self.player_messages:
+            existing_message_data = self.player_messages[guild_id]
+            existing_message = existing_message_data.get('message')
+            if existing_message:
+                try:
+                    await existing_message.edit(embed=embed, view=view)
+                    message = existing_message
+                    self.player_messages[guild_id] = {
+                        'message': message,
+                        'interaction': interaction
+                    }
+                except (discord.NotFound, discord.HTTPException):
+                    if guild_id in self.player_messages:
+                        del self.player_messages[guild_id]
+        
+        if not message:
+            try:
+                message = await interaction.followup.send(embed=embed, view=view)
+            except Exception:
+                if target_channel:
+                    message = await target_channel.send(embed=embed, view=view)
+            if message:
+                self.player_messages[guild_id] = {
+                    'message': message,
+                    'interaction': interaction
+                }
 
         def after_play(error):
-            if guild_id in self.player_messages:
-                del self.player_messages[guild_id]
             coro = self.__play_next(interaction, channel or getattr(interaction, 'channel', None))
             fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
             try:

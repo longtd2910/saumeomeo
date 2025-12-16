@@ -33,8 +33,8 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
         
         format_selectors = [
             "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-            "bestaudio/best",
-            "best"
+            # "bestaudio/best",
+            # "best"
         ]
         
         last_error = None
