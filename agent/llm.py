@@ -5,12 +5,19 @@ import discord
 from concurrent.futures import ThreadPoolExecutor
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
+from typing import Optional
 from .tool import Context, play, skip, pause, resume, random
 
 logger = logging.getLogger(__name__)
 
 class LlmProvider():
-    def __init__(self, host_base_url: str = "http://10.254.10.23:8001/v1", api_key: str = "not-needed"):
+    def __init__(
+        self,
+        host_base_url: str = "http://10.254.10.23:8001/v1",
+        api_key: str = "not-needed",
+        memory_manager = None,
+        db = None
+    ):
         self.host_base_url = host_base_url
         self.llm = ChatOpenAI(
             base_url=self.host_base_url,
@@ -18,6 +25,8 @@ class LlmProvider():
         )
         self.agent = self.init_agent()
         self.executor = ThreadPoolExecutor(max_workers=2)
+        self.memory_manager = memory_manager
+        self.db = db
 
     def init_agent(self):
         PROMPT = """Reasoning: high\nYou are a sarcastic, funny, and slightly arrogant Discord music bot.
@@ -32,6 +41,8 @@ CRITICAL RULES:
 1. ALWAYS respond in VIETNAMESE (Tiếng Việt). Never use English unless the song title is in English.
 2. Do not explain who you are unless asked. Just act.
 3. If a link is provided, DO NOT ask "what do you want to play". Just use the play tool.
+4. Check tool results before making another call.
+5. If a tool returns a success message, the action is complete. Do not repeat the same tool call.
 
 EXAMPLES:
 
@@ -60,8 +71,45 @@ tao: "Mày là user, còn tao là bố thiên hạ (đùa thôi, tao là bot nh�
         
         logger.info(f"Agent received message: {message}")
         
+        channel_id = None
+        guild_id = None
+        user_id = None
+        channel = None
+        
+        if interaction:
+            channel_id = interaction.channel_id if hasattr(interaction, 'channel_id') else None
+            guild_id = interaction.guild_id if hasattr(interaction, 'guild_id') else None
+            user_id = interaction.user.id if hasattr(interaction, 'user') and interaction.user else None
+            channel = interaction.channel if hasattr(interaction, 'channel') else None
+        elif message_obj:
+            channel_id = message_obj.channel.id if message_obj.channel else None
+            guild_id = message_obj.guild.id if message_obj.guild else None
+            user_id = message_obj.author.id if message_obj.author else None
+            channel = message_obj.channel if message_obj.channel else None
+        
+        context_messages = []
+        if self.memory_manager and channel:
+            try:
+                logger.info(f"LLM: Retrieving semantic context for channel {channel_id}")
+                context_messages = await self.memory_manager.get_relevant_messages(
+                    current_message=message,
+                    channel=channel,
+                    channel_id=channel_id
+                )
+                logger.info(f"LLM: Retrieved {len(context_messages)} relevant context messages for channel {channel_id}")
+            except Exception as e:
+                logger.error(f"LLM: Error retrieving context messages: {e}")
+        else:
+            if not self.memory_manager:
+                logger.debug("LLM: Memory manager not available, skipping context retrieval")
+            if not channel:
+                logger.debug("LLM: Channel object not available, skipping context retrieval")
+        
+        messages_to_send = context_messages + [{"role": "user", "content": message}]
+        logger.debug(f"LLM: Sending {len(messages_to_send)} messages to agent (including {len(context_messages)} context messages)")
+        
         def invoke_agent():
-            return self.agent.invoke({"messages": [{"role": "user", "content": message}]}, context=Context(interaction=interaction, message=message_obj))
+            return self.agent.invoke({"messages": messages_to_send}, context=Context(interaction=interaction, message=message_obj))
         
         response = await loop.run_in_executor(self.executor, invoke_agent)
         elapsed_time = time.time() - start_time
@@ -99,14 +147,71 @@ tao: "Mày là user, còn tao là bố thiên hạ (đùa thôi, tao là bot nh�
                     final_response = str(msg.content)
                     logger.info(f"Agent final response: {final_response}")
                     logger.info(f"Agent handled message in {elapsed_time:.3f}s")
+                    
+                    if self.db and channel_id and user_id and guild_id:
+                        asyncio.create_task(self._save_and_embed_message(
+                            user_id=user_id,
+                            guild_id=guild_id,
+                            channel_id=channel_id,
+                            user_message=message,
+                            agent_response=final_response
+                        ))
+                    
                     return final_response
+            
+            if has_successful_tool_call and self.db and channel_id and user_id and guild_id:
+                asyncio.create_task(self._save_and_embed_message(
+                    user_id=user_id,
+                    guild_id=guild_id,
+                    channel_id=channel_id,
+                    user_message=message,
+                    agent_response=None
+                ))
         
         if hasattr(response, "content") and response.content:
             final_response = str(response.content)
             logger.info(f"Agent final response: {final_response}")
             logger.info(f"Agent handled message in {elapsed_time:.3f}s")
+            
+            if self.db and channel_id and user_id and guild_id:
+                asyncio.create_task(self._save_and_embed_message(
+                    user_id=user_id,
+                    guild_id=guild_id,
+                    channel_id=channel_id,
+                    user_message=message,
+                    agent_response=final_response
+                ))
+            
             return final_response
         
         logger.warning("Agent did not return a valid response")
         logger.info(f"Agent handled message in {elapsed_time:.3f}s")
         return "Hmm, something went wrong. Try again?"
+    
+    async def _save_and_embed_message(self, user_id: int, guild_id: int, channel_id: int, user_message: str, agent_response: Optional[str] = None):
+        try:
+            logger.info(f"LLM: Saving message to history - user: {user_id}, channel: {channel_id}, has_response: {agent_response is not None}")
+            message_id = await self.db.save_chat_history(
+                user_id=user_id,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                user_message=user_message,
+                agent_response=agent_response
+            )
+            
+            if message_id:
+                logger.debug(f"LLM: Message saved with ID {message_id}")
+                if self.memory_manager:
+                    full_text = user_message
+                    if agent_response:
+                        full_text = f"{user_message}\n{agent_response}"
+                    logger.debug(f"LLM: Computing embedding for message {message_id}")
+                    embedding = await self.memory_manager.embedding_client.embed_query(full_text)
+                    await self.db.update_message_embedding(message_id, embedding)
+                    logger.info(f"LLM: Message {message_id} embedded and stored successfully")
+                else:
+                    logger.debug(f"LLM: Memory manager not available, skipping embedding for message {message_id}")
+            else:
+                logger.warning(f"LLM: Failed to save message to history")
+        except Exception as e:
+            logger.error(f"LLM: Error saving and embedding message: {e}")

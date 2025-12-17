@@ -22,6 +22,8 @@ from .controller import (
     playlist_logic, add_logic, remove_logic, random_logic
 )
 from agent.llm import LlmProvider
+from agent.embedding import EmbeddingClient
+from agent.memory import SemanticMemoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,9 @@ class MusicBot(commands.Cog):
         self.bot = bot
         self.state = global_state
         self.db = PlaylistDatabase()
-        self.llm = LlmProvider()
+        self.embedding_client = EmbeddingClient()
+        self.memory_manager = SemanticMemoryManager(self.embedding_client, self.db)
+        self.llm = LlmProvider(memory_manager=self.memory_manager, db=self.db)
         self.update_player_task.start()
         self.idle_check_task.start()
 
@@ -115,20 +119,7 @@ class MusicBot(commands.Cog):
     async def on_message(self, message: discord.Message):
         if self.bot.user in message.mentions:
             content = re.sub(r'<@!?\d+>', '', message.content).strip()
-            if self.db.pool and message.guild:
-                await self.db.save_chat_history(
-                    user_id=message.author.id,
-                    guild_id=message.guild.id,
-                    user_message=content,
-                    agent_response=None
-                )
             response = await self.llm.handle_message(content, interaction=None, message_obj=message)
-            if self.db.pool and message.guild and response is not None:
-                await self.db.update_chat_history_response(
-                    user_id=message.author.id,
-                    guild_id=message.guild.id,
-                    agent_response=response
-                )
             if response is not None:
                 await message.channel.send(response)
         

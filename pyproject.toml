@@ -13,6 +13,7 @@ dependencies = [
     "langchain-localai>=1.0.0",
     "langchain-openai>=1.1.4",
     "llama-cpp-python>=0.3.16",
+    "numpy>=1.26.0",
     "pynacl>=1.6.1",
     "python-dotenv>=1.2.1",
     "yt-dlp>=2025.12.8",

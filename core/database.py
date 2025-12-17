@@ -87,10 +87,20 @@ class PlaylistDatabase:
                     id SERIAL PRIMARY KEY,
                     user_id BIGINT NOT NULL,
                     guild_id BIGINT NOT NULL,
+                    channel_id BIGINT,
                     user_message TEXT NOT NULL,
                     agent_response TEXT,
+                    message_embedding TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
+            """)
+            await conn.execute("""
+                ALTER TABLE chat_history 
+                ADD COLUMN IF NOT EXISTS channel_id BIGINT
+            """)
+            await conn.execute("""
+                ALTER TABLE chat_history 
+                ADD COLUMN IF NOT EXISTS message_embedding TEXT
             """)
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)
@@ -100,6 +110,14 @@ class PlaylistDatabase:
             """)
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_chat_history_created_at ON chat_history(created_at)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_history_channel_created 
+                ON chat_history(channel_id, created_at)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_history_guild_channel 
+                ON chat_history(guild_id, channel_id)
             """)
 
     async def add_song(self, user_id: int, url: str, title: Optional[str] = None) -> bool:
@@ -327,20 +345,21 @@ class PlaylistDatabase:
             logger.error(f"Error getting random URLs from history: {e}")
             return []
 
-    async def save_chat_history(self, user_id: int, guild_id: int, user_message: str, agent_response: Optional[str] = None) -> bool:
+    async def save_chat_history(self, user_id: int, guild_id: int, user_message: str, agent_response: Optional[str] = None, channel_id: Optional[int] = None) -> Optional[int]:
         if not self.pool:
             logger.error("Database pool is not initialized")
-            return False
+            return None
         try:
             async with self.pool.acquire() as conn:
-                await conn.execute("""
-                    INSERT INTO chat_history (user_id, guild_id, user_message, agent_response)
-                    VALUES ($1, $2, $3, $4)
-                """, user_id, guild_id, user_message, agent_response)
-                return True
+                row = await conn.fetchrow("""
+                    INSERT INTO chat_history (user_id, guild_id, channel_id, user_message, agent_response)
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING id
+                """, user_id, guild_id, channel_id, user_message, agent_response)
+                return row['id'] if row else None
         except Exception as e:
             logger.error(f"Error saving chat history: {e}")
-            return False
+            return None
 
     async def update_chat_history_response(self, user_id: int, guild_id: int, agent_response: str) -> bool:
         if not self.pool:
@@ -364,4 +383,41 @@ class PlaylistDatabase:
                 return result != "UPDATE 0"
         except Exception as e:
             logger.error(f"Error updating chat history response: {e}")
+            return False
+
+    async def get_recent_channel_messages(self, channel_id: int, time_window_hours: int = 48, limit: int = 30) -> List[Dict]:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return []
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT id, user_id, guild_id, user_message, agent_response, message_embedding, created_at
+                    FROM chat_history
+                    WHERE channel_id = $1
+                      AND created_at >= NOW() - ($2 || ' hours')::INTERVAL
+                    ORDER BY created_at DESC
+                    LIMIT $3
+                """, channel_id, time_window_hours, limit)
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting recent channel messages: {e}")
+            return []
+
+    async def update_message_embedding(self, message_id: int, embedding: List[float]) -> bool:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return False
+        try:
+            import json
+            embedding_json = json.dumps(embedding)
+            async with self.pool.acquire() as conn:
+                result = await conn.execute("""
+                    UPDATE chat_history
+                    SET message_embedding = $1
+                    WHERE id = $2
+                """, embedding_json, message_id)
+                return result != "UPDATE 0"
+        except Exception as e:
+            logger.error(f"Error updating message embedding: {e}")
             return False
