@@ -9,76 +9,15 @@ from discord.ext import commands, tasks
 from discord import app_commands
 
 from .audio import YoutubeDLAudioSource
-from .utils import construct_log, validate_url, parse_duration, create_progress_bar, format_duration
+from .utils import (
+    construct_log, validate_url,
+    join_voice_channel, construct_player_embed
+)
 from .database import PlaylistDatabase
+from .view import MediaControlView, PlayerView, construct_queue_menu, construct_media_buttons, construct_player_embed_for_interaction
+from .controller import skip_logic, pause_logic, resume_logic, resolve_link_for_guild
 
 logger = logging.getLogger(__name__)
-
-class MediaControlView(discord.ui.View):
-    def __init__(self, callbacks: dict[str, callable], interaction):
-        super().__init__()
-        self.callbacks = callbacks
-        self.interaction = interaction
-
-    @discord.ui.button(style=discord.ButtonStyle.grey, emoji='⏸️')
-    async def pause_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await self.callbacks['Pause'](self.interaction)
-
-    @discord.ui.button(style=discord.ButtonStyle.grey, emoji='▶️')
-    async def resume_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await self.callbacks['Resume'](self.interaction)
-
-    @discord.ui.button(style=discord.ButtonStyle.grey, emoji='⏭️')
-    async def skip_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await self.callbacks['Skip'](self.interaction)
-        message = await interaction.original_response()
-        await message.edit(view=None)
-
-class PlayerView(discord.ui.View):
-    def __init__(self, bot_instance, interaction):
-        super().__init__(timeout=None)
-        self.bot_instance = bot_instance
-        self.interaction = interaction
-
-    @discord.ui.button(style=discord.ButtonStyle.grey, emoji='⏮️', row=0)
-    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-
-    @discord.ui.button(style=discord.ButtonStyle.grey, emoji='⏸️', row=0)
-    async def pause_resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild = interaction.guild
-        voice_client = guild.voice_client if guild else None
-        if voice_client and voice_client.is_playing():
-            voice_client.pause()
-            self.bot_instance.pause_start_time[guild.id] = time.time()
-            button.emoji = '▶️'
-        elif voice_client and voice_client.is_paused():
-            voice_client.resume()
-            guild_id = guild.id
-            if guild_id in self.bot_instance.pause_start_time:
-                paused_duration = time.time() - self.bot_instance.pause_start_time[guild_id]
-                if guild_id not in self.bot_instance.total_paused_time:
-                    self.bot_instance.total_paused_time[guild_id] = 0
-                self.bot_instance.total_paused_time[guild_id] += paused_duration
-                del self.bot_instance.pause_start_time[guild_id]
-            button.emoji = '⏸️'
-        await interaction.response.edit_message(view=self)
-
-    @discord.ui.button(style=discord.ButtonStyle.grey, emoji='⏭️', row=0)
-    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        await self.bot_instance._skip_logic(interaction)
-
-    @discord.ui.button(style=discord.ButtonStyle.grey, emoji='⏹️', row=0)
-    async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild = interaction.guild
-        voice_client = guild.voice_client if guild else None
-        if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
-            voice_client.stop()
-        await interaction.response.defer()
 
 
 class MusicBot(commands.Cog):
@@ -189,40 +128,10 @@ class MusicBot(commands.Cog):
             asyncio.run_coroutine_threadsafe(self.db.close(), self.bot.loop)
 
     async def join(self, interaction: discord.Interaction):
-        if not interaction.user.voice:
-            if interaction.response.is_done():
-                await interaction.followup.send(embed=discord.Embed(description="Không ở trong kênh thì vào hát kiểu lz gì?"), ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=discord.Embed(description="Không ở trong kênh thì vào hát kiểu lz gì?"), ephemeral=True)
-            return False
-        
-        guild = interaction.guild
-        voice_client = guild.voice_client if guild else None
-        
-        if voice_client is not None and voice_client.channel != interaction.user.voice.channel:
-            if interaction.response.is_done():
-                await interaction.followup.send(embed=discord.Embed(description="Tao đang hát ở chỗ khác rồi"), ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=discord.Embed(description="Tao đang hát ở chỗ khác rồi"), ephemeral=True)
-            return False
-
-        if voice_client is None:
-            await interaction.user.voice.channel.connect()
-        return True
+        return await join_voice_channel(interaction)
 
     async def __resolve_link(self, voice_id, link):
-        """Classify a link. Return a list of discord.PCMVolumeTransformer objects"""
-        if voice_id not in self.queue_dict:
-            self.queue_dict[voice_id] = []
-
-        validated_link = validate_url(link)
-        songs = await YoutubeDLAudioSource.from_url(validated_link, loop=self.bot.loop, stream=False)
-        for song in songs:
-            if not song.data.get('url'):
-                song.data['url'] = link
-                song.url = link
-        self.queue_dict[voice_id] += songs
-        return songs
+        return await resolve_link_for_guild(voice_id, link, self.bot.loop, self.queue_dict)
 
     async def __play_next(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
         guild = interaction.guild
@@ -254,7 +163,15 @@ class MusicBot(commands.Cog):
         if guild_id in self.pause_start_time:
             del self.pause_start_time[guild_id]
         
-        embed = await self.__construct_player_embed(interaction, song=song)
+        embed = construct_player_embed(
+            song=song,
+            voice_client=voice_client,
+            queue_dict=self.queue_dict,
+            guild_id=guild_id,
+            playback_start_time=self.playback_start_time,
+            total_paused_time=self.total_paused_time,
+            pause_start_time=self.pause_start_time
+        )
         view = PlayerView(self, interaction)
         
         voice_client = guild.voice_client
@@ -306,42 +223,32 @@ class MusicBot(commands.Cog):
         voice_client.play(song, after=after_play)
 
     async def __construct_media_buttons(self, interaction, metadata):
-        """Construct media buttons for the user to control the medias"""
-        embed = discord.Embed()
-        embed.add_field(name="🎶🎶🎶   Now playing   🎶🎶🎶", value=metadata['title'], inline=False)
-        embed.add_field(name="Length", value=metadata['duration'], inline=False)
-
-        return MediaControlView({
-            'Pause': self._pause_logic,
-            'Resume': self._resume_logic,
-            'Skip': self._skip_logic
-        }, interaction), embed
+        return construct_media_buttons(
+            metadata,
+            self._pause_logic,
+            self._resume_logic,
+            self._skip_logic,
+            interaction
+        )
     
     async def __construct_queue_menu(self, interaction):
-        """Construct a menu for the user to control the queue"""
-        embed = discord.Embed(title="📃   Danh sách chờ   📃")
         guild = interaction.guild
         if not guild:
+            embed = discord.Embed(title="📃   Danh sách chờ   📃")
             return None, embed
         
         voice_client = guild.voice_client
         guild_id = guild.id
 
-        if voice_client and voice_client.is_playing():
-            current_source = voice_client.source
-            embed.add_field(name="Now playing", value=current_source.data['title'], inline=False)
-
-        if len(self.queue_dict.get(guild_id, [])) > 0:
-            embed.add_field(name="Next up", value=self.queue_dict[guild_id][0].data['title'], inline=False)
-
-        if len(self.queue_dict.get(guild_id, [])) > 1:
-            embed.add_field(name="Queue", value="\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(self.queue_dict[guild_id][1:])]), inline=False)
-
-        return MediaControlView({
-            'Pause': self._pause_logic,
-            'Resume': self._resume_logic,
-            'Skip': self._skip_logic
-        }, interaction), embed
+        return construct_queue_menu(
+            self.queue_dict,
+            voice_client,
+            guild_id,
+            self._pause_logic,
+            self._resume_logic,
+            self._skip_logic,
+            interaction
+        )
 
     @app_commands.command(name='play', description='Hát')
     @app_commands.describe(url='URL hoặc tên bài hát (hoặc "personal" để phát playlist)')
@@ -427,16 +334,7 @@ class MusicBot(commands.Cog):
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        
-        voice_client = guild.voice_client
-        if voice_client and voice_client.is_playing():
-            server_id = guild.id
-            has_next = len(self.queue_dict.get(server_id, [])) > 0
-            voice_client.stop()
-            if not has_next:
-                await interaction.followup.send(embed=discord.Embed(description="Hết mẹ bài hát rồi còn đâu"))
-        else:
-            await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà skip?"))
+        await skip_logic(interaction, self.queue_dict, guild.id)
 
     @app_commands.command(name='skip', description='Bỏ qua bài hát')
     async def commands_skip(self, interaction: discord.Interaction):
@@ -449,14 +347,7 @@ class MusicBot(commands.Cog):
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        
-        voice_client = guild.voice_client
-        if voice_client and voice_client.is_playing():
-            voice_client.pause()
-            self.pause_start_time[guild.id] = time.time()
-            await interaction.followup.send(embed=discord.Embed(description="Đã tạm dừng"))
-        else:
-            await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà pause?"))
+        await pause_logic(interaction, self.pause_start_time, guild.id)
 
     @app_commands.command(name='pause', description='Tạm dừng bài hát')
     async def commands_pause(self, interaction: discord.Interaction):
@@ -469,20 +360,7 @@ class MusicBot(commands.Cog):
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        
-        voice_client = guild.voice_client
-        if voice_client and voice_client.is_paused():
-            voice_client.resume()
-            guild_id = guild.id
-            if guild_id in self.pause_start_time:
-                paused_duration = time.time() - self.pause_start_time[guild_id]
-                if guild_id not in self.total_paused_time:
-                    self.total_paused_time[guild_id] = 0
-                self.total_paused_time[guild_id] += paused_duration
-                del self.pause_start_time[guild_id]
-            await interaction.followup.send(embed=discord.Embed(description="Đã tiếp tục"))
-        else:
-            await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà resume?"))
+        await resume_logic(interaction, self.pause_start_time, self.total_paused_time, guild.id)
 
     @app_commands.command(name='resume', description='Tiếp tục bài hát')
     async def commands_resume(self, interaction: discord.Interaction):
@@ -538,69 +416,14 @@ class MusicBot(commands.Cog):
             await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà stop?"))
 
     async def __construct_player_embed(self, interaction: discord.Interaction, song=None):
-        embed = discord.Embed(title="🎵 Player", color=discord.Color.blue())
-        guild = interaction.guild
-        if not guild:
-            embed.description = "Không có bài hát nào đang phát"
-            return embed
-        
-        voice_client = guild.voice_client
-        
-        if song:
-            metadata = song.data
-        elif voice_client and (voice_client.is_playing() or voice_client.is_paused()):
-            current_source = voice_client.source
-            if not hasattr(current_source, 'data'):
-                embed.description = "Không thể lấy thông tin bài hát"
-                return embed
-            metadata = current_source.data
-        else:
-            embed.description = "Không có bài hát nào đang phát"
-            return embed
-
-        title = metadata.get('title', 'Unknown')
-        duration_str = metadata.get('duration', '00:00')
-        total_seconds = parse_duration(duration_str)
-        
-        guild_id = guild.id
-        if guild_id in self.playback_start_time:
-            base_elapsed = time.time() - self.playback_start_time[guild_id]
-            total_paused = self.total_paused_time.get(guild_id, 0)
-            
-            if voice_client and voice_client.is_paused() and guild_id in self.pause_start_time:
-                current_pause_duration = time.time() - self.pause_start_time[guild_id]
-                total_paused += current_pause_duration
-            
-            elapsed = int(base_elapsed - total_paused)
-        else:
-            elapsed = 0
-
-        if elapsed > total_seconds:
-            elapsed = total_seconds
-
-        elapsed_str = format_duration(elapsed) if elapsed >= 0 else "00:00"
-        progress_bar = create_progress_bar(elapsed, total_seconds)
-        
-        status_emoji = "⏸️" if (voice_client and voice_client.is_paused()) else "▶️"
-        
-        description_parts = [
-            f"{status_emoji}\t{title}",
-            f"{elapsed_str}\t{progress_bar}\t{duration_str}"
-        ]
-
-        queue = self.queue_dict.get(guild_id, [])
-        if queue:
-            next_songs = queue[:5]
-            queue_text = "\n".join([f"{i+1}. {song.data.get('title', 'Unknown')}" for i, song in enumerate(next_songs)])
-            if len(queue) > 5:
-                queue_text += f"\n... và {len(queue) - 5} bài hát khác"
-            description_parts.append(f"📋\tTiếp theo\n{queue_text}")
-        else:
-            description_parts.append("📋\tTiếp theo\nKhông có bài hát nào trong hàng chờ")
-
-        embed.description = "\n\n".join(description_parts)
-
-        return embed
+        return await construct_player_embed_for_interaction(
+            interaction,
+            song,
+            self.queue_dict,
+            self.playback_start_time,
+            self.total_paused_time,
+            self.pause_start_time
+        )
 
     @tasks.loop(seconds=3.0)
     async def update_player_task(self):
