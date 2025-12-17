@@ -6,6 +6,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+discord.utils.setup_logging(level=logging.INFO, root=True)
+
 from core.bot import MusicBot
 from core.database import PlaylistDatabase
 
@@ -13,8 +15,6 @@ VERSION = "1.0.8"
 CHANGE_NOTE = "- Fix lỗi khi phát bài hát từ lịch sử"
 
 load_dotenv()
-
-discord.utils.setup_logging(level=logging.INFO, root=True)
 
 logger = logging.getLogger(__name__)
 
