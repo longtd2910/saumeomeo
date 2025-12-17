@@ -1,1 +1,1 @@
-Write a short & concise commit message for current git diff changes.
+Write a short & concise commit message for current git diff changes. Output only the commit message, no other text.

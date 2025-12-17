@@ -102,7 +102,7 @@ async def _play_async(interaction_or_message, query: str) -> str:
     
     interaction = get_interaction(interaction_or_message)
     
-    await play_logic(
+    result = await play_logic(
         interaction,
         query,
         state,
@@ -112,7 +112,7 @@ async def _play_async(interaction_or_message, query: str) -> str:
         play_next_func
     )
     
-    return f"Playing: {query}"
+    return result or f"Playing: {query}"
 
 @tool
 def play(query: str, runtime: ToolRuntime[Context]) -> str:

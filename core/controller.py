@@ -87,33 +87,33 @@ async def play_logic(
     resolve_link_func: Callable,
     construct_queue_menu_func: Callable,
     play_next_func: Callable
-):
+) -> str:
     guild = interaction.guild
     if not guild:
         await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
-        return
+        return "Error: No guild found"
     
     server_id = guild.id
     queue = state.get_queue(server_id)
 
     if url is None and len(queue) == 0:
         await interaction.followup.send(embed=discord.Embed(description="Không có link thì tao hát cái gì?"))
-        return
+        return "Error: No URL provided and queue is empty"
 
     joined = await join_voice_channel(interaction)
     if not joined:
-        return
+        return "Error: Could not join voice channel"
     
     if url and url.lower() in ['personal', 'playlist']:
         if not db.pool:
             await interaction.followup.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
-            return
+            return "Error: Database unavailable"
         
         user_id = interaction.user.id
         playlist_urls = await db.get_playlist_urls(user_id)
         if not playlist_urls:
             await interaction.followup.send(embed=discord.Embed(description="Playlist của bạn trống"))
-            return
+            return "Error: Playlist is empty"
         
         songs = []
         for playlist_url in playlist_urls:
@@ -126,11 +126,11 @@ async def play_logic(
         
         if not songs:
             await interaction.followup.send(embed=discord.Embed(description="Không thể tải bài hát từ playlist"))
-            return
+            return "Error: Could not load songs from playlist"
     else:
         if not url:
             await interaction.followup.send(embed=discord.Embed(description="Không có link thì tao hát cái gì?"))
-            return
+            return "Error: No URL provided"
         songs = await resolve_link_func(guild.id, url)
     
     guild_id = guild.id
@@ -139,9 +139,13 @@ async def play_logic(
     songs_count = len(songs)
     voice_client = guild.voice_client
     current_queue_len = len(queue)
-    if current_queue_len - songs_count + 1 if voice_client and voice_client.is_playing() else 0 > 0:
+    is_playing = voice_client and voice_client.is_playing()
+    
+    if current_queue_len - songs_count + 1 if is_playing else 0 > 0:
         if songs_count == 1:
-            await interaction.followup.send(embed=discord.Embed(description=f"Đã thêm **{songs[0].data['title']}**"))
+            song_title = songs[0].data['title']
+            await interaction.followup.send(embed=discord.Embed(description=f"Đã thêm **{song_title}**"))
+            result = f"Added {song_title} to queue"
         else:
             tracks_list = "\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(songs)])
             embed = discord.Embed(
@@ -149,18 +153,32 @@ async def play_logic(
                 description=tracks_list
             )
             await interaction.followup.send(embed=embed)
+            song_titles = ", ".join([song.data['title'] for song in songs[:3]])
+            if songs_count > 3:
+                song_titles += f" and {songs_count - 3} more"
+            result = f"Added {songs_count} songs to queue: {song_titles}"
         menu, embed = await construct_queue_menu_func(interaction)
         if menu:
             await interaction.followup.send(embed=embed, view=menu)
+    else:
+        if songs_count == 1:
+            result = f"Playing {songs[0].data['title']}"
+        else:
+            song_titles = ", ".join([song.data['title'] for song in songs[:3]])
+            if songs_count > 3:
+                song_titles += f" and {songs_count - 3} more"
+            result = f"Playing {songs_count} songs: {song_titles}"
 
-    if voice_client and voice_client.is_playing():
-        return
+    if is_playing:
+        return result
     
     try:
         await play_next_func(interaction)
+        return result
     except Exception as e:
         logger.error(f"Error in play_next: {e}")
         await interaction.followup.send(embed=discord.Embed(description="Lỗi đ gì ý???"))
+        return f"Error: Failed to start playback - {str(e)}"
 
 async def queue_logic(
     interaction: discord.Interaction,
