@@ -117,7 +117,9 @@ async def _play_async(interaction_or_message, query: str) -> str:
 @tool
 def play(query: str, runtime: ToolRuntime[Context]) -> str:
     """Play a song or first 10 songs of a playlist from a given query (query can be url or title).
-    If the query is an url, it is automatically parsed. If the query is a title it will be searched on youtube."""
+    If the query is an url, it is automatically parsed. If the query is a title it will be searched on youtube.
+    Params:
+    - query: the query to search for or the url"""
     context = runtime.context
     interaction = context.interaction
     message = context.message
@@ -246,7 +248,10 @@ async def _random_async(interaction_or_message, n: int) -> str:
 
 @tool
 def skip(runtime: ToolRuntime[Context]) -> str:
-    """Skip the current song that is playing."""
+    """Skip the current song that is playing.
+    Stops the current playback and moves to the next song in the queue if available.
+    Params:
+    - No parameters required"""
     context = runtime.context
     interaction = context.interaction
     message = context.message
@@ -282,7 +287,10 @@ def skip(runtime: ToolRuntime[Context]) -> str:
 
 @tool
 def pause(runtime: ToolRuntime[Context]) -> str:
-    """Pause the current song that is playing."""
+    """Pause the current song that is playing.
+    Temporarily stops playback. Use resume to continue playing.
+    Params:
+    - No parameters required"""
     context = runtime.context
     interaction = context.interaction
     message = context.message
@@ -318,7 +326,10 @@ def pause(runtime: ToolRuntime[Context]) -> str:
 
 @tool
 def resume(runtime: ToolRuntime[Context]) -> str:
-    """Resume the paused song."""
+    """Resume the paused song.
+    Continues playback from where it was paused.
+    Params:
+    - No parameters required"""
     context = runtime.context
     interaction = context.interaction
     message = context.message
@@ -354,7 +365,10 @@ def resume(runtime: ToolRuntime[Context]) -> str:
 
 @tool
 def random(n: int, runtime: ToolRuntime[Context]) -> str:
-    """Play n random songs from the server's playback history. n should be between 1 and 10."""
+    """Play n random songs from the server's playback history.
+    Selects random songs from previously played tracks in this server and adds them to the queue.
+    Params:
+    - n: the number of random songs to play (must be between 1 and 10, default is 1 if not specified)"""
     context = runtime.context
     interaction = context.interaction
     message = context.message
