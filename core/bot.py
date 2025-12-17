@@ -15,7 +15,11 @@ from .utils import (
 )
 from .database import PlaylistDatabase
 from .view import MediaControlView, PlayerView, construct_queue_menu, construct_media_buttons, construct_player_embed_for_interaction
-from .controller import skip_logic, pause_logic, resume_logic, resolve_link_for_guild
+from .controller import (
+    skip_logic, pause_logic, resume_logic, resolve_link_for_guild,
+    play_logic, queue_logic, clear_logic, stop_logic, player_logic,
+    playlist_logic, add_logic, remove_logic, random_logic
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,81 +257,17 @@ class MusicBot(commands.Cog):
     @app_commands.command(name='play', description='Hát')
     @app_commands.describe(url='URL hoặc tên bài hát (hoặc "personal" để phát playlist)')
     async def commands_play(self, interaction: discord.Interaction, url: str = None):
-        """Add links from the user to the queue"""
         await interaction.response.defer()
-        
-        guild = interaction.guild
-        if not guild:
-            await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
-            return
-        
-        server_id = guild.id
-
-        if url is None and server_id not in self.queue_dict:
-            await interaction.followup.send(embed=discord.Embed(description="Không có link thì tao hát cái gì?"))
-            return
-
-        joined = await self.join(interaction)
-        if not joined:
-            return
-        
-        if url and url.lower() in ['personal', 'playlist']:
-            if not self.db.pool:
-                await interaction.followup.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
-                return
-            
-            user_id = interaction.user.id
-            playlist_urls = await self.db.get_playlist_urls(user_id)
-            if not playlist_urls:
-                await interaction.followup.send(embed=discord.Embed(description="Playlist của bạn trống"))
-                return
-            
-            songs = []
-            for playlist_url in playlist_urls:
-                try:
-                    resolved_songs = await self.__resolve_link(guild.id, playlist_url)
-                    songs.extend(resolved_songs)
-                except Exception as e:
-                    logger.error(f"Error resolving playlist URL {playlist_url}: {e}")
-                    continue
-            
-            if not songs:
-                await interaction.followup.send(embed=discord.Embed(description="Không thể tải bài hát từ playlist"))
-                return
-        else:
-            if not url:
-                await interaction.followup.send(embed=discord.Embed(description="Không có link thì tao hát cái gì?"))
-                return
-            songs = await self.__resolve_link(guild.id, url)
-        
-        guild_id = guild.id
-        if guild_id in self.idle_start_time:
-            del self.idle_start_time[guild_id]
-        
-        songs_count = len(songs)
-        voice_client = guild.voice_client
-        if len(self.queue_dict.get(server_id, [])) - songs_count + 1 if voice_client and voice_client.is_playing() else 0 > 0:
-            if songs_count == 1:
-                await interaction.followup.send(embed=discord.Embed(description=f"Đã thêm **{songs[0].data['title']}**"))
-            else:
-                tracks_list = "\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(songs)])
-                embed = discord.Embed(
-                    title=f"Đã thêm {songs_count} bài hát vào hàng chờ",
-                    description=tracks_list
-                )
-                await interaction.followup.send(embed=embed)
-            menu, embed = await self.__construct_queue_menu(interaction)
-            if menu:
-                await interaction.followup.send(embed=embed, view=menu)
-
-        if voice_client and voice_client.is_playing():
-            return
-        
-        try:
-            await self.__play_next(interaction)
-        except Exception as e:
-            logger.error(f"Error in __play_next: {e}")
-            await interaction.followup.send(embed=discord.Embed(description="Lỗi đ gì ý???"))
+        await play_logic(
+            interaction,
+            url,
+            self.queue_dict,
+            self.db,
+            self.__resolve_link,
+            self.__construct_queue_menu,
+            self.__play_next,
+            self.idle_start_time
+        )
 
     async def _skip_logic(self, interaction: discord.Interaction):
         guild = interaction.guild
@@ -370,50 +310,30 @@ class MusicBot(commands.Cog):
 
     @app_commands.command(name='queue', description='Xem danh sách chờ')
     async def commands_queue(self, interaction: discord.Interaction):
-        """Show the current queue"""
         await interaction.response.defer()
-        guild = interaction.guild
-        if not guild:
-            await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
-            return
-        
-        if len(self.queue_dict.get(guild.id, [])) == 0:
-            await interaction.followup.send(embed=discord.Embed(description="Hàng chờ đéo có gì cả"))
-            return
-
-        menu, embed = await self.__construct_queue_menu(interaction)
-        if menu:
-            await interaction.followup.send(embed=embed, view=menu)
-        else:
-            await interaction.followup.send(embed=embed)
+        await queue_logic(
+            interaction,
+            self.queue_dict,
+            self.__construct_queue_menu
+        )
 
     @app_commands.command(name='clear', description='Xóa danh sách chờ')
     async def commands_clear(self, interaction: discord.Interaction):
-        """Clear the current queue"""
         await interaction.response.defer()
         guild = interaction.guild
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        
-        self.queue_dict[guild.id] = []
-        await interaction.followup.send(embed=discord.Embed(description="Đã xóa hết hàng chờ"))
+        await clear_logic(interaction, self.queue_dict, guild.id)
 
     @app_commands.command(name='stop', description='Dừng bài hát')
     async def commands_stop(self, interaction: discord.Interaction):
-        """Stop the current song"""
         await interaction.response.defer()
         guild = interaction.guild
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        
-        voice_client = guild.voice_client
-        if voice_client and voice_client.is_playing():
-            voice_client.stop()
-            await interaction.followup.send(embed=discord.Embed(description="Đã dừng"))
-        else:
-            await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà stop?"))
+        await stop_logic(interaction, guild.id)
 
     async def __construct_player_embed(self, interaction: discord.Interaction, song=None):
         return await construct_player_embed_for_interaction(
@@ -506,111 +426,33 @@ class MusicBot(commands.Cog):
     @app_commands.command(name='player', description='Hiển thị player với progress và danh sách chờ')
     async def commands_player(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        guild = interaction.guild
-        if not guild:
-            await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
-            return
-        
-        voice_client = guild.voice_client
-        if not voice_client or (not voice_client.is_playing() and not voice_client.is_paused()):
-            await interaction.followup.send(embed=discord.Embed(description="Không có bài hát nào đang phát"))
-            return
-
-        embed = await self.__construct_player_embed(interaction)
-        view = PlayerView(self, interaction)
-        
-        for item in view.children:
-            if isinstance(item, discord.ui.Button) and item.emoji in ['⏸️', '▶️']:
-                if voice_client.is_paused():
-                    item.emoji = '▶️'
-                else:
-                    item.emoji = '⏸️'
-
-        message = await interaction.followup.send(embed=embed, view=view)
-        self.player_messages[guild.id] = {
-            'message': message,
-            'interaction': interaction
-        }
+        await player_logic(
+            interaction,
+            self.queue_dict,
+            self.playback_start_time,
+            self.total_paused_time,
+            self.pause_start_time,
+            self.player_messages,
+            self.__construct_player_embed,
+            lambda inter: PlayerView(self, inter)
+        )
 
     @app_commands.command(name='playlist', description='Xem playlist cá nhân')
     async def commands_playlist(self, interaction: discord.Interaction):
-        """View user's personal playlist"""
         await interaction.response.defer()
-        if not self.db.pool:
-            await interaction.followup.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
-            return
-        
-        user_id = interaction.user.id
-        playlist = await self.db.get_playlist(user_id)
-        
-        if not playlist:
-            await interaction.followup.send(embed=discord.Embed(description="Playlist của bạn trống"))
-            return
-        
-        embed = discord.Embed(title="📋 Playlist cá nhân")
-        tracks_list = "\n".join([f"{i+1}. {item.get('title', 'Unknown')} - {item.get('url', '')}" for i, item in enumerate(playlist)])
-        embed.description = tracks_list
-        await interaction.followup.send(embed=embed)
+        await playlist_logic(interaction, self.db)
 
     @app_commands.command(name='add', description='Thêm bài hát vào playlist')
     @app_commands.describe(url='URL hoặc tên bài hát')
     async def commands_add(self, interaction: discord.Interaction, url: str):
-        """Add a song to user's personal playlist"""
         await interaction.response.defer()
-        if not self.db.pool:
-            await interaction.followup.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
-            return
-        
-        if not url:
-            await interaction.followup.send(embed=discord.Embed(description="Cần cung cấp URL hoặc tên bài hát"))
-            return
-        
-        user_id = interaction.user.id
-        validated_url = validate_url(url)
-        
-        try:
-            songs = await YoutubeDLAudioSource.from_url(validated_url, loop=self.bot.loop, stream=False)
-            if not songs:
-                await interaction.followup.send(embed=discord.Embed(description="Không tìm thấy bài hát"))
-                return
-            
-            song_title = songs[0].data.get('title', 'Unknown') if songs else 'Unknown'
-            if len(songs) > 1:
-                song_title = f"{song_title} (và {len(songs) - 1} bài khác)"
-            
-            success = await self.db.add_song(user_id, validated_url, song_title)
-            
-            if success:
-                if len(songs) == 1:
-                    await interaction.followup.send(embed=discord.Embed(description=f"Đã thêm **{songs[0].data['title']}** vào playlist"))
-                else:
-                    await interaction.followup.send(embed=discord.Embed(description=f"Đã thêm playlist ({len(songs)} bài hát) vào playlist cá nhân"))
-            else:
-                await interaction.followup.send(embed=discord.Embed(description="Bài hát đã có trong playlist"))
-        except Exception as e:
-            logger.error(f"Error adding song to playlist: {e}")
-            await interaction.followup.send(embed=discord.Embed(description="Lỗi khi thêm bài hát vào playlist"))
+        await add_logic(interaction, url, self.db, self.bot.loop)
 
     @app_commands.command(name='remove', description='Xóa bài hát khỏi playlist')
     @app_commands.describe(identifier='Số thứ tự, URL hoặc tên bài hát')
     async def commands_remove(self, interaction: discord.Interaction, identifier: str):
-        """Remove a song from user's personal playlist"""
         await interaction.response.defer()
-        if not self.db.pool:
-            await interaction.followup.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
-            return
-        
-        if not identifier:
-            await interaction.followup.send(embed=discord.Embed(description="Cần cung cấp số thứ tự, URL hoặc tên bài hát"))
-            return
-        
-        user_id = interaction.user.id
-        success = await self.db.remove_song(user_id, identifier)
-        
-        if success:
-            await interaction.followup.send(embed=discord.Embed(description="Đã xóa bài hát khỏi playlist"))
-        else:
-            await interaction.followup.send(embed=discord.Embed(description="Không tìm thấy bài hát trong playlist"))
+        await remove_logic(interaction, identifier, self.db)
 
     @app_commands.command(name='play-playlist', description='Phát playlist cá nhân')
     async def commands_play_playlist(self, interaction: discord.Interaction):
@@ -620,76 +462,14 @@ class MusicBot(commands.Cog):
     @app_commands.command(name='random', description='Phát bài hát ngẫu nhiên từ lịch sử của server')
     @app_commands.describe(number_of_urls='Số lượng bài hát muốn phát (mặc định: 1)')
     async def commands_random(self, interaction: discord.Interaction, number_of_urls: int = 1):
-        """Play random songs from guild's play history"""
         await interaction.response.defer()
-        
-        guild = interaction.guild
-        if not guild:
-            await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
-            return
-        
-        if not self.db.pool:
-            await interaction.followup.send(embed=discord.Embed(description="Database không khả dụng. Vui lòng thử lại sau."))
-            return
-        
-        if number_of_urls < 1:
-            await interaction.followup.send(embed=discord.Embed(description="Số lượng phải lớn hơn 0"))
-            return
-        
-        if number_of_urls > 10:
-            number_of_urls = 10
-        
-        guild_id = guild.id
-        random_urls = await self.db.get_random_urls_from_history(guild_id, number_of_urls)
-        
-        if not random_urls:
-            await interaction.followup.send(embed=discord.Embed(description="Không có lịch sử phát nhạc trong server này"))
-            return
-        
-        joined = await self.join(interaction)
-        if not joined:
-            return
-        
-        songs = []
-        for url_data in random_urls:
-            url = url_data.get('url')
-            if url:
-                try:
-                    resolved_songs = await self.__resolve_link(guild.id, url)
-                    songs.extend(resolved_songs)
-                except Exception as e:
-                    logger.error(f"Error resolving random URL {url}: {e}")
-                    continue
-        
-        if not songs:
-            await interaction.followup.send(embed=discord.Embed(description="Không thể tải bài hát từ lịch sử"))
-            return
-        
-        guild_id = guild.id
-        if guild_id in self.idle_start_time:
-            del self.idle_start_time[guild_id]
-        
-        songs_count = len(songs)
-        voice_client = guild.voice_client
-        if len(self.queue_dict.get(guild_id, [])) - songs_count + 1 if voice_client and voice_client.is_playing() else 0 > 0:
-            if songs_count == 1:
-                await interaction.followup.send(embed=discord.Embed(description=f"Đã thêm **{songs[0].data['title']}** từ lịch sử"))
-            else:
-                tracks_list = "\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(songs)])
-                embed = discord.Embed(
-                    title=f"Đã thêm {songs_count} bài hát từ lịch sử vào hàng chờ",
-                    description=tracks_list
-                )
-                await interaction.followup.send(embed=embed)
-            menu, embed = await self.__construct_queue_menu(interaction)
-            if menu:
-                await interaction.followup.send(embed=embed, view=menu)
-
-        if voice_client and voice_client.is_playing():
-            return
-        
-        try:
-            await self.__play_next(interaction)
-        except Exception as e:
-            logger.error(f"Error in __play_next: {e}")
-            await interaction.followup.send(embed=discord.Embed(description="Lỗi đ gì ý???"))
+        await random_logic(
+            interaction,
+            number_of_urls,
+            self.queue_dict,
+            self.db,
+            self.__resolve_link,
+            self.__construct_queue_menu,
+            self.__play_next,
+            self.idle_start_time
+        )
