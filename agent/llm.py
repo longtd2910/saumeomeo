@@ -65,7 +65,7 @@ Bot: "Play *what*, genius?"
             model=self.llm,
             tools=[play],
             system_prompt=PROMPT,
-            context=Context
+            context_schema=Context
         )
     
     def handle_message(self, message: str, interaction: discord.Interaction):
