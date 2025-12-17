@@ -68,5 +68,5 @@ Bot: "Play *what*, genius?"
             context_schema=Context
         )
     
-    def handle_message(self, message: str, interaction: discord.Interaction):
-        return self.agent.invoke({"input": message}, context=Context(interaction=interaction))
+    def handle_message(self, message: str, interaction: discord.Interaction = None, message_obj: discord.Message = None):
+        return self.agent.invoke({"input": message}, context=Context(interaction=interaction, message=message_obj))

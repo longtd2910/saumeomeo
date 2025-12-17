@@ -11,15 +11,25 @@ from core.view import construct_queue_menu
 
 @dataclass
 class Context:
-    interaction: discord.Interaction
+    interaction: discord.Interaction = None
+    message: discord.Message = None
 
-def get_music_bot_cog(interaction: discord.Interaction):
-    bot = interaction.client
+def get_music_bot_cog(interaction_or_message):
+    if isinstance(interaction_or_message, discord.Interaction):
+        bot = interaction_or_message.client
+    elif isinstance(interaction_or_message, discord.Message):
+        bot = interaction_or_message._state._get_client()
+        if bot is None and interaction_or_message.guild:
+            bot = interaction_or_message.guild._state._get_client()
+    else:
+        return None
+    if bot is None:
+        return None
     cog = bot.get_cog('MusicBot')
     return cog
 
-async def _play_async(interaction: discord.Interaction, query: str) -> str:
-    cog = get_music_bot_cog(interaction)
+async def _play_async(interaction_or_message, query: str) -> str:
+    cog = get_music_bot_cog(interaction_or_message)
     if not cog:
         return "Error: MusicBot cog not found"
     
@@ -52,6 +62,44 @@ async def _play_async(interaction: discord.Interaction, query: str) -> str:
     async def play_next_func(interaction):
         await cog.play_next(interaction)
     
+    if isinstance(interaction_or_message, discord.Message):
+        message = interaction_or_message
+        
+        class FakeResponse:
+            def __init__(self, channel):
+                self._done = True
+                self._channel = channel
+            
+            def is_done(self):
+                return True
+            
+            async def send_message(self, *args, **kwargs):
+                return await self._channel.send(*args, **kwargs)
+        
+        class FakeFollowup:
+            def __init__(self, channel):
+                self.channel = channel
+            
+            async def send(self, *args, **kwargs):
+                ephemeral = kwargs.pop('ephemeral', False)
+                return await self.channel.send(*args, **kwargs)
+        
+        class FakeInteraction:
+            def __init__(self, message):
+                self.guild = message.guild
+                self.channel = message.channel
+                self.user = message.author
+                self.response = FakeResponse(message.channel)
+                self.followup = FakeFollowup(message.channel)
+            
+            async def defer(self):
+                pass
+        
+        fake_interaction = FakeInteraction(message)
+        interaction = fake_interaction
+    else:
+        interaction = interaction_or_message
+    
     await play_logic(
         interaction,
         query,
@@ -70,13 +118,30 @@ def play(query: str, runtime: ToolRuntime[Context]) -> str:
     If the query is an url, it is automatically parsed. If the query is a title it will be searched on youtube."""
     context = runtime.context
     interaction = context.interaction
+    message = context.message
+    
+    if interaction is None and message is None:
+        return "Error: No interaction or message provided"
+    
+    interaction_or_message = interaction if interaction is not None else message
     
     async def defer_and_play():
-        if not interaction.response.is_done():
+        if interaction and not interaction.response.is_done():
             await interaction.response.defer()
-        return await _play_async(interaction, query)
+        return await _play_async(interaction_or_message, query)
     
-    loop = interaction.client.loop
+    if isinstance(interaction_or_message, discord.Interaction):
+        loop = interaction_or_message.client.loop
+    elif isinstance(interaction_or_message, discord.Message):
+        bot = interaction_or_message._state._get_client()
+        if bot is None and interaction_or_message.guild:
+            bot = interaction_or_message.guild._state._get_client()
+        if bot is None:
+            return "Error: Could not get bot client from message"
+        loop = bot.loop
+    else:
+        return "Error: Invalid interaction or message"
+    
     coro = defer_and_play()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
     try:
