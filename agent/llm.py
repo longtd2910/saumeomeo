@@ -34,23 +34,42 @@ class LlmProvider():
         loop = asyncio.get_event_loop()
         start_time = time.time()
         
+        logger.info(f"Agent received message: {message}")
+        
         def invoke_agent():
             return self.agent.invoke({"input": message}, context=Context(interaction=interaction, message=message_obj))
         
         response = await loop.run_in_executor(self.executor, invoke_agent)
         elapsed_time = time.time() - start_time
         
-        log_message = f"Agent handled message in {elapsed_time:.3f}s"
-        logger.info(log_message)
-        print(log_message)
-        
         if isinstance(response, dict) and "messages" in response:
             messages = response["messages"]
+            logger.info(f"Agent execution completed with {len(messages)} message(s)")
+            
+            for i, msg in enumerate(messages):
+                msg_type = type(msg).__name__
+                if hasattr(msg, "content") and msg.content:
+                    logger.info(f"Agent step {i+1} [{msg_type}]: {msg.content}")
+                elif hasattr(msg, "tool") and hasattr(msg, "tool_input"):
+                    logger.info(f"Agent step {i+1} [ToolCall]: tool={msg.tool}, input={msg.tool_input}")
+                elif hasattr(msg, "tool_calls"):
+                    logger.info(f"Agent step {i+1} [ToolCalls]: {msg.tool_calls}")
+                else:
+                    logger.debug(f"Agent step {i+1} [{msg_type}]: {str(msg)}")
+            
             for msg in reversed(messages):
                 if hasattr(msg, "content") and msg.content:
-                    return str(msg.content)
+                    final_response = str(msg.content)
+                    logger.info(f"Agent final response: {final_response}")
+                    logger.info(f"Agent handled message in {elapsed_time:.3f}s")
+                    return final_response
         
         if hasattr(response, "content") and response.content:
-            return str(response.content)
+            final_response = str(response.content)
+            logger.info(f"Agent final response: {final_response}")
+            logger.info(f"Agent handled message in {elapsed_time:.3f}s")
+            return final_response
         
+        logger.warning("Agent did not return a valid response")
+        logger.info(f"Agent handled message in {elapsed_time:.3f}s")
         return "Hmm, something went wrong. Try again?"

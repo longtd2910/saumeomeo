@@ -14,6 +14,8 @@ CHANGE_NOTE = "- Fix lỗi khi phát bài hát từ lịch sử"
 
 load_dotenv()
 
+discord.utils.setup_logging(level=logging.INFO, root=True)
+
 logger = logging.getLogger(__name__)
 
 def compare_versions(version1: str, version2: str) -> int:
