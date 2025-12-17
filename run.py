@@ -13,8 +13,8 @@ discord.utils.setup_logging(level=logging.INFO, root=True)
 from core.bot import MusicBot
 from core.database import PlaylistDatabase
 
-VERSION = "1.0.8"
-CHANGE_NOTE = "- Fix lỗi khi phát bài hát từ lịch sử"
+VERSION = "2.0.0"
+CHANGE_NOTE = "- Thêm não cho sâu meo meo\n- Tag @Sâu Meo Meo để trò chuyện và ra lệnh\n- Project chính thức đạt 3000 dòng code 🎉"
 
 logger = logging.getLogger(__name__)
 
