@@ -1,6 +1,8 @@
 import logging
 import time
+import asyncio
 import discord
+from concurrent.futures import ThreadPoolExecutor
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from .tool import Context, play
@@ -15,6 +17,7 @@ class LlmProvider():
             api_key=api_key
         )
         self.agent = self.init_agent()
+        self.executor = ThreadPoolExecutor(max_workers=2)
 
     def init_agent(self):
         PROMPT = """You are a discord bot that can play music and chat with users. You must always respond using the language of the user's message.
@@ -27,12 +30,19 @@ class LlmProvider():
             context_schema=Context
         )
     
-    def handle_message(self, message: str, interaction: discord.Interaction = None, message_obj: discord.Message = None):
+    async def handle_message(self, message: str, interaction: discord.Interaction = None, message_obj: discord.Message = None):
+        loop = asyncio.get_event_loop()
         start_time = time.time()
-        response = self.agent.invoke({"input": message}, context=Context(interaction=interaction, message=message_obj))
+        
+        def invoke_agent():
+            return self.agent.invoke({"input": message}, context=Context(interaction=interaction, message=message_obj))
+        
+        response = await loop.run_in_executor(self.executor, invoke_agent)
         elapsed_time = time.time() - start_time
         
-        logger.info(f"Agent handled message in {elapsed_time:.3f}s")
+        log_message = f"Agent handled message in {elapsed_time:.3f}s"
+        logger.info(log_message)
+        print(log_message)
         
         if isinstance(response, dict) and "messages" in response:
             messages = response["messages"]

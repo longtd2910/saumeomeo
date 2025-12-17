@@ -1,0 +1,1 @@
+Write a short & concise commit message for current git diff changes.

@@ -113,7 +113,7 @@ class MusicBot(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if self.bot.user in message.mentions:
-            response = self.llm.handle_message(message.content, interaction=None, message_obj=message)
+            response = await self.llm.handle_message(message.content, interaction=None, message_obj=message)
             await message.channel.send(response)
         
     @commands.Cog.listener()
