@@ -20,6 +20,7 @@ from .controller import (
     play_logic, queue_logic, clear_logic, stop_logic, player_logic,
     playlist_logic, add_logic, remove_logic, random_logic
 )
+from agent.llm import LlmProvider
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class MusicBot(commands.Cog):
         self.bot = bot
         self.state = global_state
         self.db = PlaylistDatabase()
+        self.llm = LlmProvider()
         self.update_player_task.start()
         self.idle_check_task.start()
 
