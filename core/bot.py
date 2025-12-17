@@ -109,6 +109,12 @@ class MusicBot(commands.Cog):
             logger.error(construct_log(f'Failed to sync commands: {e}'))
 
     @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if self.bot.user in message.mentions:
+            response = self.llm.handle_message(message.content, message.interaction)
+            await message.channel.send(response)
+        
+    @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
         if self.db.pool:
             success = await self.db.add_guild(guild.id)

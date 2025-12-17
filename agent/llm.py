@@ -1,6 +1,7 @@
+import discord
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
-from .tool import Context
+from .tool import Context, play
 
 class LlmProvider():
     def __init__(self, host_base_url: str = "http://10.254.10.23:8001/v1"):
@@ -61,7 +62,10 @@ Bot: "Play *what*, genius?"
 """
         return create_agent(
             model=self.llm,
-            tools=[],
+            tools=[play],
             system_prompt=PROMPT,
             context=Context
         )
+    
+    def handle_message(self, message: str, interaction: discord.Interaction):
+        return self.agent.invoke({"input": message}, context=Context(interaction=interaction))
