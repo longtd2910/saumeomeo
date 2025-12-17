@@ -2,6 +2,7 @@ import logging
 import asyncio
 import time
 import random
+import re
 
 import discord
 from discord.ext import commands, tasks
@@ -113,7 +114,8 @@ class MusicBot(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if self.bot.user in message.mentions:
-            response = await self.llm.handle_message(message.content, interaction=None, message_obj=message)
+            content = re.sub(r'<@!?\d+>', '', message.content).strip()
+            response = await self.llm.handle_message(content, interaction=None, message_obj=message)
             await message.channel.send(response)
         
     @commands.Cog.listener()
