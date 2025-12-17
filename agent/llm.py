@@ -4,10 +4,11 @@ from langchain.agents import create_agent
 from .tool import Context, play
 
 class LlmProvider():
-    def __init__(self, host_base_url: str = "http://10.254.10.23:8001/v1"):
+    def __init__(self, host_base_url: str = "http://10.254.10.23:8001/v1", api_key: str = "not-needed"):
         self.host_base_url = host_base_url
         self.llm = ChatOpenAI(
-            base_url=self.host_base_url
+            base_url=self.host_base_url,
+            api_key=api_key
         )
         self.agent = self.init_agent()
 
