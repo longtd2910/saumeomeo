@@ -119,6 +119,7 @@ class SemanticMemoryManager:
             for i, discord_msg in enumerate(discord_messages):
                 message_id = discord_msg.id
                 user_id = discord_msg.author.id
+                username = discord_msg.author.display_name or discord_msg.author.name
                 user_message = discord_msg.content
                 
                 if not user_message or not user_message.strip():
@@ -136,6 +137,7 @@ class SemanticMemoryManager:
                 message_pairs.append({
                     'id': message_id,
                     'user_id': user_id,
+                    'username': username,
                     'user_message': user_message,
                     'agent_response': agent_response,
                     'created_at': discord_msg.created_at
@@ -146,6 +148,7 @@ class SemanticMemoryManager:
             for msg_data in message_pairs:
                 message_id = msg_data['id']
                 user_id = msg_data['user_id']
+                username = msg_data.get('username', f"User {user_id}")
                 user_message = msg_data['user_message']
                 agent_response = msg_data.get('agent_response')
                 created_at = msg_data['created_at']
@@ -191,6 +194,7 @@ class SemanticMemoryManager:
                         'message': {
                             'id': message_id,
                             'user_id': user_id,
+                            'username': username,
                             'user_message': user_message,
                             'agent_response': agent_response,
                             'created_at': msg_created_at
@@ -217,13 +221,13 @@ class SemanticMemoryManager:
             formatted_messages = []
             for item in top_messages:
                 msg = item['message']
-                user_id = msg['user_id']
+                username = msg.get('username', f"User {msg.get('user_id', 'Unknown')}")
                 user_message = msg['user_message']
                 agent_response = msg.get('agent_response')
                 
                 formatted_messages.append({
                     'role': 'user',
-                    'content': f"[User {user_id}]: {user_message}"
+                    'content': f"[{username}]: {user_message}"
                 })
                 
                 if agent_response:
