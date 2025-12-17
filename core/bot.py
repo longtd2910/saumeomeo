@@ -163,6 +163,8 @@ class MusicBot(commands.Cog):
         if guild_id in self.pause_start_time:
             del self.pause_start_time[guild_id]
         
+        voice_client = guild.voice_client
+        
         embed = construct_player_embed(
             song=song,
             voice_client=voice_client,
@@ -173,8 +175,6 @@ class MusicBot(commands.Cog):
             pause_start_time=self.pause_start_time
         )
         view = PlayerView(self, interaction)
-        
-        voice_client = guild.voice_client
         for item in view.children:
             if isinstance(item, discord.ui.Button) and item.emoji in ['⏸️', '▶️']:
                 if voice_client and voice_client.is_paused():
