@@ -57,10 +57,7 @@ async def join_voice_channel(interaction: discord.Interaction) -> bool:
         await interaction.user.voice.channel.connect()
     return True
 
-async def resolve_link(link: str, loop, queue_dict: Dict, voice_id: int):
-    if voice_id not in queue_dict:
-        queue_dict[voice_id] = []
-
+async def resolve_link(link: str, loop, state, voice_id: int):
     from .audio import YoutubeDLAudioSource
     
     validated_link = validate_url(link)
@@ -69,17 +66,18 @@ async def resolve_link(link: str, loop, queue_dict: Dict, voice_id: int):
         if not song.data.get('url'):
             song.data['url'] = link
             song.url = link
-    queue_dict[voice_id] += songs
+    queue = state.get_queue(voice_id)
+    queue.extend(songs)
     return songs
 
 def construct_player_embed(
     song: Optional[object],
     voice_client: Optional[discord.VoiceClient],
-    queue_dict: Dict,
+    state,
     guild_id: int,
-    playback_start_time: Dict,
-    total_paused_time: Dict,
-    pause_start_time: Dict
+    playback_start_time,
+    total_paused_time,
+    pause_start_time
 ) -> discord.Embed:
     embed = discord.Embed(title="🎵 Player", color=discord.Color.blue())
     
@@ -99,13 +97,16 @@ def construct_player_embed(
     duration_str = metadata.get('duration', '00:00')
     total_seconds = parse_duration(duration_str)
     
-    if guild_id in playback_start_time:
-        base_elapsed = time.time() - playback_start_time[guild_id]
-        total_paused = total_paused_time.get(guild_id, 0)
+    playback_start = playback_start_time.get_playback_start_time(guild_id)
+    if playback_start:
+        base_elapsed = time.time() - playback_start
+        total_paused = total_paused_time.get_total_paused_time(guild_id)
         
-        if voice_client and voice_client.is_paused() and guild_id in pause_start_time:
-            current_pause_duration = time.time() - pause_start_time[guild_id]
-            total_paused += current_pause_duration
+        if voice_client and voice_client.is_paused():
+            pause_start = pause_start_time.get_pause_start_time(guild_id)
+            if pause_start:
+                current_pause_duration = time.time() - pause_start
+                total_paused += current_pause_duration
         
         elapsed = int(base_elapsed - total_paused)
     else:
@@ -124,7 +125,7 @@ def construct_player_embed(
         f"{elapsed_str}\t{progress_bar}\t{duration_str}"
     ]
 
-    queue = queue_dict.get(guild_id, [])
+    queue = state.get_queue(guild_id)
     if queue:
         next_songs = queue[:5]
         queue_text = "\n".join([f"{i+1}. {song.data.get('title', 'Unknown')}" for i, song in enumerate(next_songs)])
@@ -139,7 +140,7 @@ def construct_player_embed(
     return embed
 
 def construct_queue_menu_embed(
-    queue_dict: Dict,
+    state,
     voice_client: Optional[discord.VoiceClient],
     guild_id: int
 ) -> discord.Embed:
@@ -149,11 +150,12 @@ def construct_queue_menu_embed(
         current_source = voice_client.source
         embed.add_field(name="Now playing", value=current_source.data['title'], inline=False)
 
-    if len(queue_dict.get(guild_id, [])) > 0:
-        embed.add_field(name="Next up", value=queue_dict[guild_id][0].data['title'], inline=False)
+    queue = state.get_queue(guild_id)
+    if len(queue) > 0:
+        embed.add_field(name="Next up", value=queue[0].data['title'], inline=False)
 
-    if len(queue_dict.get(guild_id, [])) > 1:
-        embed.add_field(name="Queue", value="\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(queue_dict[guild_id][1:])]), inline=False)
+    if len(queue) > 1:
+        embed.add_field(name="Queue", value="\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(queue[1:])]), inline=False)
 
     return embed
 

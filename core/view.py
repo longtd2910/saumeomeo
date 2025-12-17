@@ -41,19 +41,21 @@ class PlayerView(discord.ui.View):
     async def pause_resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild = interaction.guild
         voice_client = guild.voice_client if guild else None
+        state = self.bot_instance.state
+        guild_id = guild.id if guild else None
+        
         if voice_client and voice_client.is_playing():
             voice_client.pause()
-            self.bot_instance.pause_start_time[guild.id] = time.time()
+            state.set_pause_start_time(guild_id, time.time())
             button.emoji = '▶️'
         elif voice_client and voice_client.is_paused():
             voice_client.resume()
-            guild_id = guild.id
-            if guild_id in self.bot_instance.pause_start_time:
-                paused_duration = time.time() - self.bot_instance.pause_start_time[guild_id]
-                if guild_id not in self.bot_instance.total_paused_time:
-                    self.bot_instance.total_paused_time[guild_id] = 0
-                self.bot_instance.total_paused_time[guild_id] += paused_duration
-                del self.bot_instance.pause_start_time[guild_id]
+            pause_start = state.get_pause_start_time(guild_id)
+            if pause_start:
+                paused_duration = time.time() - pause_start
+                total_paused = state.get_total_paused_time(guild_id)
+                state.set_total_paused_time(guild_id, total_paused + paused_duration)
+                state.set_pause_start_time(guild_id, None)
             button.emoji = '⏸️'
         await interaction.response.edit_message(view=self)
 
@@ -71,7 +73,7 @@ class PlayerView(discord.ui.View):
         await interaction.response.defer()
 
 def construct_queue_menu(
-    queue_dict: Dict,
+    state,
     voice_client: Optional[discord.VoiceClient],
     guild_id: int,
     pause_callback,
@@ -85,11 +87,12 @@ def construct_queue_menu(
         current_source = voice_client.source
         embed.add_field(name="Now playing", value=current_source.data['title'], inline=False)
 
-    if len(queue_dict.get(guild_id, [])) > 0:
-        embed.add_field(name="Next up", value=queue_dict[guild_id][0].data['title'], inline=False)
+    queue = state.get_queue(guild_id)
+    if len(queue) > 0:
+        embed.add_field(name="Next up", value=queue[0].data['title'], inline=False)
 
-    if len(queue_dict.get(guild_id, [])) > 1:
-        embed.add_field(name="Queue", value="\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(queue_dict[guild_id][1:])]), inline=False)
+    if len(queue) > 1:
+        embed.add_field(name="Queue", value="\n".join([f"{i+1}. {song.data['title']}" for i, song in enumerate(queue[1:])]), inline=False)
 
     return MediaControlView({
         'Pause': pause_callback,
@@ -108,10 +111,10 @@ def construct_media_buttons(metadata: Dict, pause_callback, resume_callback, ski
 async def construct_player_embed_for_interaction(
     interaction: discord.Interaction,
     song: Optional[object],
-    queue_dict: Dict,
-    playback_start_time: Dict,
-    total_paused_time: Dict,
-    pause_start_time: Dict
+    state,
+    playback_start_time,
+    total_paused_time,
+    pause_start_time
 ) -> discord.Embed:
     embed = discord.Embed(title="🎵 Player", color=discord.Color.blue())
     guild = interaction.guild
@@ -138,13 +141,16 @@ async def construct_player_embed_for_interaction(
     total_seconds = parse_duration(duration_str)
     
     guild_id = guild.id
-    if guild_id in playback_start_time:
-        base_elapsed = time.time() - playback_start_time[guild_id]
-        total_paused = total_paused_time.get(guild_id, 0)
+    playback_start = playback_start_time.get_playback_start_time(guild_id)
+    if playback_start:
+        base_elapsed = time.time() - playback_start
+        total_paused = total_paused_time.get_total_paused_time(guild_id)
         
-        if voice_client and voice_client.is_paused() and guild_id in pause_start_time:
-            current_pause_duration = time.time() - pause_start_time[guild_id]
-            total_paused += current_pause_duration
+        if voice_client and voice_client.is_paused():
+            pause_start = pause_start_time.get_pause_start_time(guild_id)
+            if pause_start:
+                current_pause_duration = time.time() - pause_start
+                total_paused += current_pause_duration
         
         elapsed = int(base_elapsed - total_paused)
     else:
@@ -163,7 +169,7 @@ async def construct_player_embed_for_interaction(
         f"{elapsed_str}\t{progress_bar}\t{duration_str}"
     ]
 
-    queue = queue_dict.get(guild_id, [])
+    queue = state.get_queue(guild_id)
     if queue:
         next_songs = queue[:5]
         queue_text = "\n".join([f"{i+1}. {song.data.get('title', 'Unknown')}" for i, song in enumerate(next_songs)])

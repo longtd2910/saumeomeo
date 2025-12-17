@@ -2,7 +2,6 @@ import logging
 import asyncio
 import time
 import random
-from collections import defaultdict
 
 import discord
 from discord.ext import commands, tasks
@@ -14,6 +13,7 @@ from .utils import (
     join_voice_channel, construct_player_embed
 )
 from .database import PlaylistDatabase
+from .state import global_state
 from .view import MediaControlView, PlayerView, construct_queue_menu, construct_media_buttons, construct_player_embed_for_interaction
 from .controller import (
     skip_logic, pause_logic, resume_logic, resolve_link_for_guild,
@@ -27,13 +27,7 @@ logger = logging.getLogger(__name__)
 class MusicBot(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.queue_dict: defaultdict[list[discord.FFmpegPCMAudio]] = {}
-        self.current_menu_dict: defaultdict = {}
-        self.playback_start_time: defaultdict = {}
-        self.pause_start_time: defaultdict = {}
-        self.total_paused_time: defaultdict = {}
-        self.player_messages: defaultdict = {}
-        self.idle_start_time: defaultdict = {}
+        self.state = global_state
         self.db = PlaylistDatabase()
         self.update_player_task.start()
         self.idle_check_task.start()
@@ -134,27 +128,26 @@ class MusicBot(commands.Cog):
     async def join(self, interaction: discord.Interaction):
         return await join_voice_channel(interaction)
 
-    async def __resolve_link(self, voice_id, link):
-        return await resolve_link_for_guild(voice_id, link, self.bot.loop, self.queue_dict)
+    async def resolve_link(self, voice_id, link):
+        return await resolve_link_for_guild(voice_id, link, self.bot.loop, self.state)
 
-    async def __play_next(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+    async def play_next(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
         guild = interaction.guild
         if not guild:
             return
         
         guild_id = guild.id
-        if len(self.queue_dict.get(guild_id, [])) == 0:
+        queue = self.state.get_queue(guild_id)
+        if len(queue) == 0:
             voice_client = guild.voice_client
             if voice_client and not voice_client.is_playing() and not voice_client.is_paused():
-                self.idle_start_time[guild_id] = time.time()
-            if guild_id in self.player_messages:
-                del self.player_messages[guild_id]
+                self.state.set_idle_start_time(guild_id, time.time())
+            self.state.clear_player_message(guild_id)
             return
         
-        if guild_id in self.idle_start_time:
-            del self.idle_start_time[guild_id]
+        self.state.clear_idle_start_time(guild_id)
         
-        song = self.queue_dict[guild_id].pop(0)
+        song = queue.pop(0)
 
         if self.db.pool:
             url = song.data.get('url') or getattr(song, 'url', None)
@@ -162,21 +155,20 @@ class MusicBot(commands.Cog):
             if url:
                 await self.db.log_played_url(guild_id, url, title)
 
-        self.playback_start_time[guild_id] = time.time()
-        self.total_paused_time[guild_id] = 0
-        if guild_id in self.pause_start_time:
-            del self.pause_start_time[guild_id]
+        self.state.set_playback_start_time(guild_id, time.time())
+        self.state.set_total_paused_time(guild_id, 0)
+        self.state.set_pause_start_time(guild_id, None)
         
         voice_client = guild.voice_client
         
         embed = construct_player_embed(
             song=song,
             voice_client=voice_client,
-            queue_dict=self.queue_dict,
+            queue_dict=self.state,
             guild_id=guild_id,
-            playback_start_time=self.playback_start_time,
-            total_paused_time=self.total_paused_time,
-            pause_start_time=self.pause_start_time
+            playback_start_time=self.state,
+            total_paused_time=self.state,
+            pause_start_time=self.state
         )
         view = PlayerView(self, interaction)
         for item in view.children:
@@ -189,20 +181,14 @@ class MusicBot(commands.Cog):
         target_channel = channel or getattr(interaction, 'channel', None)
         message = None
         
-        if guild_id in self.player_messages:
-            existing_message_data = self.player_messages[guild_id]
-            existing_message = existing_message_data.get('message')
-            if existing_message:
-                try:
-                    await existing_message.edit(embed=embed, view=view)
-                    message = existing_message
-                    self.player_messages[guild_id] = {
-                        'message': message,
-                        'interaction': interaction
-                    }
-                except (discord.NotFound, discord.HTTPException):
-                    if guild_id in self.player_messages:
-                        del self.player_messages[guild_id]
+        existing_message = self.state.get_player_message(guild_id)
+        if existing_message:
+            try:
+                await existing_message.edit(embed=embed, view=view)
+                message = existing_message
+                self.state.set_player_message(guild_id, message, interaction)
+            except (discord.NotFound, discord.HTTPException):
+                self.state.clear_player_message(guild_id)
         
         if not message:
             try:
@@ -211,13 +197,10 @@ class MusicBot(commands.Cog):
                 if target_channel:
                     message = await target_channel.send(embed=embed, view=view)
             if message:
-                self.player_messages[guild_id] = {
-                    'message': message,
-                    'interaction': interaction
-                }
+                self.state.set_player_message(guild_id, message, interaction)
 
         def after_play(error):
-            coro = self.__play_next(interaction, channel or getattr(interaction, 'channel', None))
+            coro = self.play_next(interaction, channel or getattr(interaction, 'channel', None))
             fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
             try:
                 fut.result()
@@ -235,7 +218,7 @@ class MusicBot(commands.Cog):
             interaction
         )
     
-    async def __construct_queue_menu(self, interaction):
+    async def construct_queue_menu(self, interaction):
         guild = interaction.guild
         if not guild:
             embed = discord.Embed(title="📃   Danh sách chờ   📃")
@@ -245,7 +228,7 @@ class MusicBot(commands.Cog):
         guild_id = guild.id
 
         return construct_queue_menu(
-            self.queue_dict,
+            self.state,
             voice_client,
             guild_id,
             self._pause_logic,
@@ -261,12 +244,11 @@ class MusicBot(commands.Cog):
         await play_logic(
             interaction,
             url,
-            self.queue_dict,
+            self.state,
             self.db,
-            self.__resolve_link,
-            self.__construct_queue_menu,
-            self.__play_next,
-            self.idle_start_time
+            self.resolve_link,
+            self.construct_queue_menu,
+            self.play_next
         )
 
     async def _skip_logic(self, interaction: discord.Interaction):
@@ -274,7 +256,7 @@ class MusicBot(commands.Cog):
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        await skip_logic(interaction, self.queue_dict, guild.id)
+        await skip_logic(interaction, self.state, guild.id)
 
     @app_commands.command(name='skip', description='Bỏ qua bài hát')
     async def commands_skip(self, interaction: discord.Interaction):
@@ -287,7 +269,7 @@ class MusicBot(commands.Cog):
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        await pause_logic(interaction, self.pause_start_time, guild.id)
+        await pause_logic(interaction, self.state, guild.id)
 
     @app_commands.command(name='pause', description='Tạm dừng bài hát')
     async def commands_pause(self, interaction: discord.Interaction):
@@ -300,7 +282,7 @@ class MusicBot(commands.Cog):
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        await resume_logic(interaction, self.pause_start_time, self.total_paused_time, guild.id)
+        await resume_logic(interaction, self.state, guild.id)
 
     @app_commands.command(name='resume', description='Tiếp tục bài hát')
     async def commands_resume(self, interaction: discord.Interaction):
@@ -313,8 +295,8 @@ class MusicBot(commands.Cog):
         await interaction.response.defer()
         await queue_logic(
             interaction,
-            self.queue_dict,
-            self.__construct_queue_menu
+            self.state,
+            self.construct_queue_menu
         )
 
     @app_commands.command(name='clear', description='Xóa danh sách chờ')
@@ -324,7 +306,7 @@ class MusicBot(commands.Cog):
         if not guild:
             await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
             return
-        await clear_logic(interaction, self.queue_dict, guild.id)
+        await clear_logic(interaction, self.state, guild.id)
 
     @app_commands.command(name='stop', description='Dừng bài hát')
     async def commands_stop(self, interaction: discord.Interaction):
@@ -335,36 +317,37 @@ class MusicBot(commands.Cog):
             return
         await stop_logic(interaction, guild.id)
 
-    async def __construct_player_embed(self, interaction: discord.Interaction, song=None):
+    async def construct_player_embed(self, interaction: discord.Interaction, song=None):
         return await construct_player_embed_for_interaction(
             interaction,
             song,
-            self.queue_dict,
-            self.playback_start_time,
-            self.total_paused_time,
-            self.pause_start_time
+            self.state,
+            self.state,
+            self.state,
+            self.state
         )
 
     @tasks.loop(seconds=3.0)
     async def update_player_task(self):
-        for guild_id, message_data in list(self.player_messages.items()):
+        for guild_id in list(self.state._states.keys()):
             try:
-                interaction = message_data['interaction']
-                message = message_data['message']
-                guild = interaction.guild
+                message = self.state.get_player_message(guild_id)
+                interaction = self.state.get_player_interaction(guild_id)
                 
+                if not message or not interaction:
+                    continue
+                
+                guild = interaction.guild
                 if not guild:
-                    if guild_id in self.player_messages:
-                        del self.player_messages[guild_id]
+                    self.state.clear_player_message(guild_id)
                     continue
                 
                 voice_client = guild.voice_client
                 if not voice_client or (not voice_client.is_playing() and not voice_client.is_paused()):
-                    if guild_id in self.player_messages:
-                        del self.player_messages[guild_id]
+                    self.state.clear_player_message(guild_id)
                     continue
 
-                embed = await self.__construct_player_embed(interaction)
+                embed = await self.construct_player_embed(interaction)
                 view = PlayerView(self, interaction)
                 
                 for item in view.children:
@@ -376,8 +359,7 @@ class MusicBot(commands.Cog):
 
                 await message.edit(embed=embed, view=view)
             except (discord.NotFound, discord.HTTPException, AttributeError) as e:
-                if guild_id in self.player_messages:
-                    del self.player_messages[guild_id]
+                self.state.clear_player_message(guild_id)
 
     @update_player_task.before_loop
     async def before_update_player_task(self):
@@ -386,38 +368,37 @@ class MusicBot(commands.Cog):
     @tasks.loop(seconds=30.0)
     async def idle_check_task(self):
         current_time = time.time()
-        for guild_id in list(self.idle_start_time.keys()):
+        for guild_id in list(self.state._states.keys()):
             try:
+                idle_start = self.state.get_idle_start_time(guild_id)
+                if not idle_start:
+                    continue
+                
                 guild = self.bot.get_guild(guild_id)
                 if not guild:
-                    if guild_id in self.idle_start_time:
-                        del self.idle_start_time[guild_id]
+                    self.state.clear_idle_start_time(guild_id)
                     continue
                 
                 voice_client = guild.voice_client
                 if not voice_client:
-                    if guild_id in self.idle_start_time:
-                        del self.idle_start_time[guild_id]
+                    self.state.clear_idle_start_time(guild_id)
                     continue
                 
-                queue = self.queue_dict.get(guild_id, [])
+                queue = self.state.get_queue(guild_id)
                 is_playing = voice_client.is_playing() or voice_client.is_paused()
                 
                 if is_playing or len(queue) > 0:
-                    if guild_id in self.idle_start_time:
-                        del self.idle_start_time[guild_id]
+                    self.state.clear_idle_start_time(guild_id)
                     continue
                 
-                idle_duration = current_time - self.idle_start_time[guild_id]
+                idle_duration = current_time - idle_start
                 if idle_duration >= 180:
                     await voice_client.disconnect()
-                    if guild_id in self.idle_start_time:
-                        del self.idle_start_time[guild_id]
+                    self.state.clear_idle_start_time(guild_id)
                     logger.debug(construct_log(f"Disconnected from voice channel in guild {guild_id} after 3 minutes of idle"))
             except Exception as e:
                 logger.error(construct_log(f"Error in idle check for guild {guild_id}: {e}"))
-                if guild_id in self.idle_start_time:
-                    del self.idle_start_time[guild_id]
+                self.state.clear_idle_start_time(guild_id)
 
     @idle_check_task.before_loop
     async def before_idle_check_task(self):
@@ -428,12 +409,8 @@ class MusicBot(commands.Cog):
         await interaction.response.defer()
         await player_logic(
             interaction,
-            self.queue_dict,
-            self.playback_start_time,
-            self.total_paused_time,
-            self.pause_start_time,
-            self.player_messages,
-            self.__construct_player_embed,
+            self.state,
+            self.construct_player_embed,
             lambda inter: PlayerView(self, inter)
         )
 
@@ -466,10 +443,9 @@ class MusicBot(commands.Cog):
         await random_logic(
             interaction,
             number_of_urls,
-            self.queue_dict,
+            self.state,
             self.db,
-            self.__resolve_link,
-            self.__construct_queue_menu,
-            self.__play_next,
-            self.idle_start_time
+            self.resolve_link,
+            self.construct_queue_menu,
+            self.play_next
         )

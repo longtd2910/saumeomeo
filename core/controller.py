@@ -1,6 +1,7 @@
 import time
 import logging
 from typing import Dict, Optional, Callable
+from langchain.tools import tool
 
 import discord
 
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 async def skip_logic(
     interaction: discord.Interaction,
-    queue_dict: Dict,
+    state,
     guild_id: int
 ):
     guild = interaction.guild
@@ -21,7 +22,8 @@ async def skip_logic(
     
     voice_client = guild.voice_client
     if voice_client and voice_client.is_playing():
-        has_next = len(queue_dict.get(guild_id, [])) > 0
+        queue = state.get_queue(guild_id)
+        has_next = len(queue) > 0
         voice_client.stop()
         if not has_next:
             await interaction.followup.send(embed=discord.Embed(description="Hết mẹ bài hát rồi còn đâu"))
@@ -30,7 +32,7 @@ async def skip_logic(
 
 async def pause_logic(
     interaction: discord.Interaction,
-    pause_start_time: Dict,
+    state,
     guild_id: int
 ):
     guild = interaction.guild
@@ -41,15 +43,14 @@ async def pause_logic(
     voice_client = guild.voice_client
     if voice_client and voice_client.is_playing():
         voice_client.pause()
-        pause_start_time[guild_id] = time.time()
+        state.set_pause_start_time(guild_id, time.time())
         await interaction.followup.send(embed=discord.Embed(description="Đã tạm dừng"))
     else:
         await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà pause?"))
 
 async def resume_logic(
     interaction: discord.Interaction,
-    pause_start_time: Dict,
-    total_paused_time: Dict,
+    state,
     guild_id: int
 ):
     guild = interaction.guild
@@ -60,12 +61,12 @@ async def resume_logic(
     voice_client = guild.voice_client
     if voice_client and voice_client.is_paused():
         voice_client.resume()
-        if guild_id in pause_start_time:
-            paused_duration = time.time() - pause_start_time[guild_id]
-            if guild_id not in total_paused_time:
-                total_paused_time[guild_id] = 0
-            total_paused_time[guild_id] += paused_duration
-            del pause_start_time[guild_id]
+        pause_start = state.get_pause_start_time(guild_id)
+        if pause_start:
+            paused_duration = time.time() - pause_start
+            total_paused = state.get_total_paused_time(guild_id)
+            state.set_total_paused_time(guild_id, total_paused + paused_duration)
+            state.set_pause_start_time(guild_id, None)
         await interaction.followup.send(embed=discord.Embed(description="Đã tiếp tục"))
     else:
         await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà resume?"))
@@ -74,19 +75,18 @@ async def resolve_link_for_guild(
     voice_id: int,
     link: str,
     loop,
-    queue_dict: Dict
+    state
 ):
-    return await resolve_link(link, loop, queue_dict, voice_id)
+    return await resolve_link(link, loop, state, voice_id)
 
 async def play_logic(
     interaction: discord.Interaction,
     url: Optional[str],
-    queue_dict: Dict,
+    state,
     db,
     resolve_link_func: Callable,
     construct_queue_menu_func: Callable,
-    play_next_func: Callable,
-    idle_start_time: Dict
+    play_next_func: Callable
 ):
     guild = interaction.guild
     if not guild:
@@ -94,8 +94,9 @@ async def play_logic(
         return
     
     server_id = guild.id
+    queue = state.get_queue(server_id)
 
-    if url is None and server_id not in queue_dict:
+    if url is None and len(queue) == 0:
         await interaction.followup.send(embed=discord.Embed(description="Không có link thì tao hát cái gì?"))
         return
 
@@ -133,12 +134,12 @@ async def play_logic(
         songs = await resolve_link_func(guild.id, url)
     
     guild_id = guild.id
-    if guild_id in idle_start_time:
-        del idle_start_time[guild_id]
+    state.clear_idle_start_time(guild_id)
     
     songs_count = len(songs)
     voice_client = guild.voice_client
-    if len(queue_dict.get(server_id, [])) - songs_count + 1 if voice_client and voice_client.is_playing() else 0 > 0:
+    current_queue_len = len(queue)
+    if current_queue_len - songs_count + 1 if voice_client and voice_client.is_playing() else 0 > 0:
         if songs_count == 1:
             await interaction.followup.send(embed=discord.Embed(description=f"Đã thêm **{songs[0].data['title']}**"))
         else:
@@ -163,7 +164,7 @@ async def play_logic(
 
 async def queue_logic(
     interaction: discord.Interaction,
-    queue_dict: Dict,
+    state,
     construct_queue_menu_func: Callable
 ):
     guild = interaction.guild
@@ -171,7 +172,8 @@ async def queue_logic(
         await interaction.followup.send(embed=discord.Embed(description="Lỗi: Không tìm thấy server"))
         return
     
-    if len(queue_dict.get(guild.id, [])) == 0:
+    queue = state.get_queue(guild.id)
+    if len(queue) == 0:
         await interaction.followup.send(embed=discord.Embed(description="Hàng chờ đéo có gì cả"))
         return
 
@@ -183,10 +185,10 @@ async def queue_logic(
 
 async def clear_logic(
     interaction: discord.Interaction,
-    queue_dict: Dict,
+    state,
     guild_id: int
 ):
-    queue_dict[guild_id] = []
+    state.clear_queue(guild_id)
     await interaction.followup.send(embed=discord.Embed(description="Đã xóa hết hàng chờ"))
 
 async def stop_logic(
@@ -207,11 +209,7 @@ async def stop_logic(
 
 async def player_logic(
     interaction: discord.Interaction,
-    queue_dict: Dict,
-    playback_start_time: Dict,
-    total_paused_time: Dict,
-    pause_start_time: Dict,
-    player_messages: Dict,
+    state,
     construct_player_embed_func: Callable,
     player_view_factory: Callable
 ):
@@ -236,10 +234,7 @@ async def player_logic(
                 item.emoji = '⏸️'
 
     message = await interaction.followup.send(embed=embed, view=view)
-    player_messages[guild.id] = {
-        'message': message,
-        'interaction': interaction
-    }
+    state.set_player_message(guild.id, message, interaction)
 
 async def playlist_logic(
     interaction: discord.Interaction,
@@ -325,12 +320,11 @@ async def remove_logic(
 async def random_logic(
     interaction: discord.Interaction,
     number_of_urls: int,
-    queue_dict: Dict,
+    state,
     db,
     resolve_link_func: Callable,
     construct_queue_menu_func: Callable,
-    play_next_func: Callable,
-    idle_start_time: Dict
+    play_next_func: Callable
 ):
     guild = interaction.guild
     if not guild:
@@ -374,13 +368,13 @@ async def random_logic(
         await interaction.followup.send(embed=discord.Embed(description="Không thể tải bài hát từ lịch sử"))
         return
     
-    guild_id = guild.id
-    if guild_id in idle_start_time:
-        del idle_start_time[guild_id]
+    state.clear_idle_start_time(guild_id)
     
     songs_count = len(songs)
     voice_client = guild.voice_client
-    if len(queue_dict.get(guild_id, [])) - songs_count + 1 if voice_client and voice_client.is_playing() else 0 > 0:
+    queue = state.get_queue(guild_id)
+    current_queue_len = len(queue)
+    if current_queue_len - songs_count + 1 if voice_client and voice_client.is_playing() else 0 > 0:
         if songs_count == 1:
             await interaction.followup.send(embed=discord.Embed(description=f"Đã thêm **{songs[0].data['title']}** từ lịch sử"))
         else:
