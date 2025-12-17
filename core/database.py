@@ -82,6 +82,25 @@ class PlaylistDatabase:
             await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_play_log_played_at ON play_log(played_at)
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_history (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    guild_id BIGINT NOT NULL,
+                    user_message TEXT NOT NULL,
+                    agent_response TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_history_guild_id ON chat_history(guild_id)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_history_created_at ON chat_history(created_at)
+            """)
 
     async def add_song(self, user_id: int, url: str, title: Optional[str] = None) -> bool:
         if not self.pool:
@@ -307,3 +326,42 @@ class PlaylistDatabase:
         except Exception as e:
             logger.error(f"Error getting random URLs from history: {e}")
             return []
+
+    async def save_chat_history(self, user_id: int, guild_id: int, user_message: str, agent_response: Optional[str] = None) -> bool:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO chat_history (user_id, guild_id, user_message, agent_response)
+                    VALUES ($1, $2, $3, $4)
+                """, user_id, guild_id, user_message, agent_response)
+                return True
+        except Exception as e:
+            logger.error(f"Error saving chat history: {e}")
+            return False
+
+    async def update_chat_history_response(self, user_id: int, guild_id: int, agent_response: str) -> bool:
+        if not self.pool:
+            logger.error("Database pool is not initialized")
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                result = await conn.execute("""
+                    UPDATE chat_history
+                    SET agent_response = $1
+                    WHERE id = (
+                        SELECT id
+                        FROM chat_history
+                        WHERE user_id = $2
+                          AND guild_id = $3
+                          AND agent_response IS NULL
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    )
+                """, agent_response, user_id, guild_id)
+                return result != "UPDATE 0"
+        except Exception as e:
+            logger.error(f"Error updating chat history response: {e}")
+            return False

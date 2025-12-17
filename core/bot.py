@@ -115,8 +115,22 @@ class MusicBot(commands.Cog):
     async def on_message(self, message: discord.Message):
         if self.bot.user in message.mentions:
             content = re.sub(r'<@!?\d+>', '', message.content).strip()
+            if self.db.pool and message.guild:
+                await self.db.save_chat_history(
+                    user_id=message.author.id,
+                    guild_id=message.guild.id,
+                    user_message=content,
+                    agent_response=None
+                )
             response = await self.llm.handle_message(content, interaction=None, message_obj=message)
-            await message.channel.send(response)
+            if self.db.pool and message.guild and response is not None:
+                await self.db.update_chat_history_response(
+                    user_id=message.author.id,
+                    guild_id=message.guild.id,
+                    agent_response=response
+                )
+            if response is not None:
+                await message.channel.send(response)
         
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):

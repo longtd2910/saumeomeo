@@ -70,9 +70,17 @@ tao: "Mày là user, còn tao là bố thiên hạ (đùa thôi, tao là bot nh�
             messages = response["messages"]
             logger.info(f"Agent execution completed with {len(messages)} message(s)")
             
+            has_successful_tool_call = False
             for i, msg in enumerate(messages):
                 msg_type = type(msg).__name__
-                if hasattr(msg, "content") and msg.content:
+                
+                if msg_type == "ToolMessage" and hasattr(msg, "content") and msg.content:
+                    tool_result = str(msg.content)
+                    logger.info(f"Agent step {i+1} [ToolMessage]: {tool_result}")
+                    if not tool_result.startswith("Error"):
+                        has_successful_tool_call = True
+                        logger.info(f"Agent step {i+1} [ToolMessage]: Successful tool call detected")
+                elif hasattr(msg, "content") and msg.content:
                     logger.info(f"Agent step {i+1} [{msg_type}]: {msg.content}")
                 elif hasattr(msg, "tool") and hasattr(msg, "tool_input"):
                     logger.info(f"Agent step {i+1} [ToolCall]: tool={msg.tool}, input={msg.tool_input}")
@@ -80,6 +88,11 @@ tao: "Mày là user, còn tao là bố thiên hạ (đùa thôi, tao là bot nh�
                     logger.info(f"Agent step {i+1} [ToolCalls]: {msg.tool_calls}")
                 else:
                     logger.debug(f"Agent step {i+1} [{msg_type}]: {str(msg)}")
+            
+            if has_successful_tool_call:
+                logger.info("Successful tool call detected, omitting agent message")
+                logger.info(f"Agent handled message in {elapsed_time:.3f}s")
+                return None
             
             for msg in reversed(messages):
                 if hasattr(msg, "content") and msg.content:
