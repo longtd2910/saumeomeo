@@ -1,18 +1,18 @@
-FROM python:3.10-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
 ENV LANG C.UTF-8
 ENV LC_ALL C.UTF-8
 
-RUN pip install discord
-RUN pip install PyNaCl
-RUN pip install -U yt_dlp
-RUN pip install python-dotenv
-RUN pip install asyncpg
+RUN apt-get update && apt-get install -y ffmpeg nodejs npm curl && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y ffmpeg nodejs npm && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+COPY pyproject.toml uv.lock ./
+
+RUN uv sync --frozen
 
 COPY . /app/
 
-CMD ["python", "run.py"]
+CMD ["uv", "run", "python", "run.py"]
