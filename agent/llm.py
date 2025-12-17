@@ -105,8 +105,23 @@ tao: "Mày là user, còn tao là bố thiên hạ (đùa thôi, tao là bot nh�
             if not channel:
                 logger.debug("LLM: Channel object not available, skipping context retrieval")
         
-        messages_to_send = context_messages + [{"role": "user", "content": message}]
-        logger.debug(f"LLM: Sending {len(messages_to_send)} messages to agent (including {len(context_messages)} context messages)")
+        user_content = message
+        if context_messages:
+            dialogue_lines = []
+            for msg in context_messages:
+                role = msg.get('role', 'user')
+                content = msg.get('content', '')
+                if role == 'user':
+                    dialogue_lines.append(content)
+                elif role == 'assistant':
+                    dialogue_lines.append(f"Assistant: {content}")
+            
+            dialogue_text = "\n".join(dialogue_lines)
+            user_content = f"These chat may be related to the user request:\n{dialogue_text}\n\nUse them as the reference only\n\n{message}"
+            logger.debug(f"LLM: Combined {len(context_messages)} context messages into dialogue format")
+        
+        messages_to_send = [{"role": "user", "content": user_content}]
+        logger.debug(f"LLM: Sending 1 message to agent (with {len(context_messages)} context messages embedded in dialogue format)")
         
         def invoke_agent():
             return self.agent.invoke({"messages": messages_to_send}, context=Context(interaction=interaction, message=message_obj))
