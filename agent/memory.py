@@ -73,7 +73,7 @@ class SemanticMemoryManager:
             
             discord_messages = []
             async for msg in channel.history(limit=limit, after=cutoff_time, oldest_first=False):
-                if msg.author.bot and msg.author.id != channel.guild.me.id if channel.guild else True:
+                if msg.author.bot and len(msg.embeds) > 0:
                     continue
                 discord_messages.append(msg)
             
@@ -125,7 +125,7 @@ class SemanticMemoryManager:
                 if not user_message or not user_message.strip():
                     continue
                 
-                if user_id == bot_id:
+                if user_id == bot_id and len(discord_msg.embeds) > 0:
                     continue
                 
                 agent_response = None
