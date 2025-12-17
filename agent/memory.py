@@ -212,7 +212,7 @@ class SemanticMemoryManager:
             logger.info(f"Memory: Selected top {len(top_messages)} messages (max: {max_messages})")
             
             if top_messages:
-                logger.debug(f"Memory: Top message scores - {', '.join([f'{m[\"score\"]:.3f}' for m in top_messages[:5]])}")
+                logger.debug(f"Memory: Top message scores - {', '.join([f'{m['score']:.3f}' for m in top_messages[:5]])}")
             
             formatted_messages = []
             for item in top_messages:
