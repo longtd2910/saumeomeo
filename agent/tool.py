@@ -271,17 +271,7 @@ def skip(skip_i: Optional[int] = None, skip_to_j: Optional[int] = None, *, runti
       second song, etc. This parameter takes precedence over skip_i if both are provided. Must be a 
       positive integer (>= 1) and cannot exceed the number of songs in the queue.
     
-    Behavior:
-    - If neither parameter is provided: Skips only the current song (default behavior, same as skip_i=1).
-    - If skip_to_j is provided: Removes all songs before position j from the queue, then skips to that position.
-    - If only skip_i is provided: Removes (skip_i - 1) songs from the queue, then skips the current song.
-    - If both are provided: skip_to_j takes precedence and skip_i is ignored.
-    
-    Examples:
-    - skip() or skip(skip_i=1): Skip the current song, play the next one in queue.
-    - skip(skip_i=3): Skip the current song and the next 2 songs, play the 4th song.
-    - skip(skip_to_j=1): Skip to the first song in queue (next up).
-    - skip(skip_to_j=5): Skip to the 5th song in queue, removing songs at positions 1-4.
+    Before accepting the user request to skip an amount. You should call the get_queue tool to get the current queue and calculate the amount of songs to skip.
     
     Note: If there are not enough songs in the queue to fulfill the request, an error message will be returned."""
     
