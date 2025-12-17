@@ -172,7 +172,7 @@ class MusicBot(commands.Cog):
         embed = construct_player_embed(
             song=song,
             voice_client=voice_client,
-            queue_dict=self.state,
+            state=self.state,
             guild_id=guild_id,
             playback_start_time=self.state,
             total_paused_time=self.state,

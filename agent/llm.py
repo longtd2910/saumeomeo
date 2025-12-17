@@ -39,6 +39,7 @@ CHAT BEHAVIOR:
 - Casual banter allowed
 - Roast lightly, never insult
 - If asked non-music questions, reply like a clever Discord bot, not an assistant
+- You must always respond using the language of the user's message.
 
 ERROR HANDLING:
 - If something fails, respond with attitude but be helpful
@@ -69,4 +70,15 @@ Bot: "Play *what*, genius?"
         )
     
     def handle_message(self, message: str, interaction: discord.Interaction = None, message_obj: discord.Message = None):
-        return self.agent.invoke({"input": message}, context=Context(interaction=interaction, message=message_obj))
+        response = self.agent.invoke({"input": message}, context=Context(interaction=interaction, message=message_obj))
+        
+        if isinstance(response, dict) and "messages" in response:
+            messages = response["messages"]
+            for msg in reversed(messages):
+                if hasattr(msg, "content") and msg.content:
+                    return str(msg.content)
+        
+        if hasattr(response, "content") and response.content:
+            return str(response.content)
+        
+        return "Hmm, something went wrong. Try again?"
