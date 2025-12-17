@@ -10,10 +10,10 @@ from core.database import PlaylistDatabase
 
 logger = logging.getLogger(__name__)
 
-SIMILARITY_THRESHOLD = 0.8
-MIN_SIMILARITY = 0.8
-MAX_CONTEXT_MESSAGES = 20
-TIME_WINDOW_HOURS = 24
+SIMILARITY_THRESHOLD = 0.7
+MIN_SIMILARITY = 0.7
+MAX_CONTEXT_MESSAGES = 10
+TIME_WINDOW_HOURS = 48
 
 class SemanticMemoryManager:
     def __init__(self, embedding_client: EmbeddingClient, db: PlaylistDatabase):
