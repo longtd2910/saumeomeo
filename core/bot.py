@@ -143,8 +143,8 @@ class MusicBot(commands.Cog):
     async def join(self, interaction: discord.Interaction):
         return await join_voice_channel(interaction)
 
-    async def resolve_link(self, voice_id, link):
-        return await resolve_link_for_guild(voice_id, link, self.bot.loop, self.state)
+    async def resolve_link(self, voice_id, link, n=1):
+        return await resolve_link_for_guild(voice_id, link, self.bot.loop, self.state, n)
 
     async def play_next(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
         guild = interaction.guild
@@ -253,8 +253,8 @@ class MusicBot(commands.Cog):
         )
 
     @app_commands.command(name='play', description='Hát')
-    @app_commands.describe(url='URL hoặc tên bài hát (hoặc "personal" để phát playlist)')
-    async def commands_play(self, interaction: discord.Interaction, url: str = None):
+    @app_commands.describe(url='URL hoặc tên bài hát (hoặc "personal" để phát playlist)', n='Số lượng bài hát muốn phát từ query hoặc playlist (mặc định: 1)')
+    async def commands_play(self, interaction: discord.Interaction, url: str = None, n: int = 1):
         await interaction.response.defer()
         await play_logic(
             interaction,
@@ -263,7 +263,8 @@ class MusicBot(commands.Cog):
             self.db,
             self.resolve_link,
             self.construct_queue_menu,
-            self.play_next
+            self.play_next,
+            n
         )
 
     async def _skip_logic(self, interaction: discord.Interaction):

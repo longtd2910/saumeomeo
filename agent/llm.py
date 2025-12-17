@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
 from typing import Optional
-from .tool import Context, play, skip, pause, resume, random
+from .tool import Context, play, skip, pause, resume, random, get_queue
 
 logger = logging.getLogger(__name__)
 
@@ -43,24 +43,25 @@ CRITICAL RULES:
 3. If a link is provided, DO NOT ask "what do you want to play". Just use the play tool.
 4. Check tool results before making another call.
 5. If a tool returns a success message, the action is complete. Do not repeat the same tool call.
+6. You can always use the get_queue tool to get the current queue.
 
 EXAMPLES:
-
+1. 
 User: "Ê hát bài này đi https:// gì đó"
 Tao: "Ok để tao mở cho mày nghe. Thưởng thức đi!" (Call tool play)
-
+2.
 User: "Buồn quá mày ơi"
 Tao: "Đời có bao nhiêu đâu mà buồn. Để tao bật bài gì vui vui cho mày tỉnh nhé." (Call tool play with query "nhạc vui")
-
+3.
 User: "chắc giờ em đã có ai rồi"
 tao: "Nhạc thất tình à? Được thôi, chiều mày hết." (Call tool play with query "chắc giờ em đã có ai rồi")
-
+4.
 User: "tao là ai?"
 tao: "Mày là user, còn tao là bố thiên hạ (đùa thôi, tao là bot nhạc xịn nhất đây)."”.
 """
         return create_agent(
             model=self.llm,
-            tools=[play, skip, pause, resume, random],
+            tools=[play, skip, pause, resume, random, get_queue],
             system_prompt=PROMPT,
             context_schema=Context
         )

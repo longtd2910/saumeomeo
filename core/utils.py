@@ -8,10 +8,12 @@ import discord
 def construct_log(log):
     return f"{datetime.now()} | {log}"
 
-def validate_url(url):
+def validate_url(url, n=1):
     parsed = urlparse(url)
     if parsed.scheme in ("http", "https"):
         return url
+    if n > 1:
+        return f"ytsearch{n}:{url}"
     return f"ytsearch:{url}"
 
 def format_duration(duration: int):
@@ -57,11 +59,11 @@ async def join_voice_channel(interaction: discord.Interaction) -> bool:
         await interaction.user.voice.channel.connect()
     return True
 
-async def resolve_link(link: str, loop, state, voice_id: int):
+async def resolve_link(link: str, loop, state, voice_id: int, n: int = 1):
     from .audio import YoutubeDLAudioSource
     
-    validated_link = validate_url(link)
-    songs = await YoutubeDLAudioSource.from_url(validated_link, loop=loop, stream=False)
+    validated_link = validate_url(link, n)
+    songs = await YoutubeDLAudioSource.from_url(validated_link, loop=loop, stream=False, n=n)
     for song in songs:
         if not song.data.get('url'):
             song.data['url'] = link

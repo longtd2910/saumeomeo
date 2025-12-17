@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 async def skip_logic(
     interaction: discord.Interaction,
     state,
-    guild_id: int
+    guild_id: int,
+    skip_i: Optional[int] = None,
+    skip_to_j: Optional[int] = None
 ):
     guild = interaction.guild
     if not guild:
@@ -21,14 +23,55 @@ async def skip_logic(
         return
     
     voice_client = guild.voice_client
-    if voice_client and voice_client.is_playing():
-        queue = state.get_queue(guild_id)
+    if not voice_client or not voice_client.is_playing():
+        await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà skip?"))
+        return
+    
+    queue = state.get_queue(guild_id)
+    
+    if skip_to_j is not None:
+        if skip_to_j < 1:
+            await interaction.followup.send(embed=discord.Embed(description="Số thứ tự phải lớn hơn 0"))
+            return
+        
+        if skip_to_j > len(queue):
+            await interaction.followup.send(embed=discord.Embed(description=f"Chỉ có {len(queue)} bài trong hàng chờ, không thể skip đến bài thứ {skip_to_j}"))
+            return
+        
+        songs_to_remove = skip_to_j - 1
+        for _ in range(songs_to_remove):
+            if len(queue) > 0:
+                queue.pop(0)
+        
+        voice_client.stop()
+        if skip_to_j == 1:
+            await interaction.followup.send(embed=discord.Embed(description="Đã skip đến bài tiếp theo"))
+        else:
+            await interaction.followup.send(embed=discord.Embed(description=f"Đã skip đến bài thứ {skip_to_j} trong hàng chờ"))
+    elif skip_i is not None:
+        if skip_i < 1:
+            await interaction.followup.send(embed=discord.Embed(description="Số bài cần skip phải lớn hơn 0"))
+            return
+        
+        songs_to_remove = skip_i - 1
+        if songs_to_remove > len(queue):
+            await interaction.followup.send(embed=discord.Embed(description=f"Chỉ có {len(queue)} bài trong hàng chờ, không thể skip {skip_i} bài"))
+            return
+        
+        for _ in range(songs_to_remove):
+            if len(queue) > 0:
+                queue.pop(0)
+        
+        voice_client.stop()
+        if skip_i == 1:
+            await interaction.followup.send(embed=discord.Embed(description="Đã skip bài hiện tại"))
+        else:
+            await interaction.followup.send(embed=discord.Embed(description=f"Đã skip {skip_i} bài"))
+    else:
         has_next = len(queue) > 0
         voice_client.stop()
         if not has_next:
             await interaction.followup.send(embed=discord.Embed(description="Hết mẹ bài hát rồi còn đâu"))
-    else:
-        await interaction.followup.send(embed=discord.Embed(description="Có đang hát đéo đâu mà skip?"))
 
 async def pause_logic(
     interaction: discord.Interaction,
@@ -75,9 +118,10 @@ async def resolve_link_for_guild(
     voice_id: int,
     link: str,
     loop,
-    state
+    state,
+    n: int = 1
 ):
-    return await resolve_link(link, loop, state, voice_id)
+    return await resolve_link(link, loop, state, voice_id, n)
 
 async def play_logic(
     interaction: discord.Interaction,
@@ -86,7 +130,8 @@ async def play_logic(
     db,
     resolve_link_func: Callable,
     construct_queue_menu_func: Callable,
-    play_next_func: Callable
+    play_next_func: Callable,
+    n: int = 1
 ) -> str:
     guild = interaction.guild
     if not guild:
@@ -118,7 +163,7 @@ async def play_logic(
         songs = []
         for playlist_url in playlist_urls:
             try:
-                resolved_songs = await resolve_link_func(guild.id, playlist_url)
+                resolved_songs = await resolve_link_func(guild.id, playlist_url, n)
                 songs.extend(resolved_songs)
             except Exception as e:
                 logger.error(f"Error resolving playlist URL {playlist_url}: {e}")
@@ -131,7 +176,7 @@ async def play_logic(
         if not url:
             await interaction.followup.send(embed=discord.Embed(description="Không có link thì tao hát cái gì?"))
             return "Error: No URL provided"
-        songs = await resolve_link_func(guild.id, url)
+        songs = await resolve_link_func(guild.id, url, n)
     
     guild_id = guild.id
     state.clear_idle_start_time(guild_id)

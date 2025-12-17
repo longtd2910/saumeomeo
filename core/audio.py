@@ -25,7 +25,7 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
         return 'youtube.com' in parsed.netloc or 'youtu.be' in parsed.netloc
 
     @classmethod
-    async def from_url(self, url, *, loop=None, stream=False):
+    async def from_url(self, url, *, loop=None, stream=False, n=1):
         command = ["yt-dlp"]
         
         if self._is_youtube_url(url):
@@ -33,16 +33,24 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
         
         format_selectors = [
             "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-            # "bestaudio/best",
-            # "best"
         ]
+        
+        is_search = url.startswith('ytsearch')
+        is_playlist = 'playlist' in url.lower() or 'list=' in url.lower()
+        
+        if is_search:
+            limit = n
+        elif is_playlist:
+            limit = n
+        else:
+            limit = 1
         
         last_error = None
         for format_selector in format_selectors:
             cmd = command + [
                 "--dump-single-json",
                 "--playlist-end",
-                "10",
+                str(limit),
                 "--no-warnings",
                 "-f",
                 format_selector,
@@ -60,7 +68,7 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
                 try:
                     data = json.loads(stdout.decode())
                     entries = data['entries'] if 'entries' in data else [data]
-                    entries = entries[:10]
+                    entries = entries[:limit]
                     results = []
                     for entry in entries:
                         stream_url = entry.get('url')
