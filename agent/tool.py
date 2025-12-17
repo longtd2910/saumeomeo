@@ -67,7 +67,7 @@ def get_interaction(interaction_or_message):
     else:
         return interaction_or_message
 
-async def _play_async(interaction_or_message, query: str) -> str:
+async def _play_async(interaction_or_message, query: str, n: int = 1) -> str:
     cog = get_music_bot_cog(interaction_or_message)
     if not cog:
         return "Error: MusicBot cog not found"
@@ -111,17 +111,18 @@ async def _play_async(interaction_or_message, query: str) -> str:
         resolve_link_func,
         construct_queue_menu_func,
         play_next_func,
-        1
+        n
     )
     
     return result or f"Playing: {query}"
 
 @tool
-def play(query: str, runtime: ToolRuntime[Context]) -> str:
-    """Play a song or first 10 songs of a playlist from a given query (query can be url or title).
+def play(query: str, n: int = 1, *, runtime: ToolRuntime[Context]) -> str:
+    """Play a song or multiple songs from a given query (query can be url or title).
     If the query is an url, it is automatically parsed. If the query is a title it will be searched on youtube.
     Params:
-    - query: the query to search for or the url"""
+    - query: the query to search for or the url
+    - n: the number of songs to play from the query or playlist (This is default to 1 instead explicitly specified by the user). For single URLs, this parameter is ignored."""
     context = runtime.context
     interaction = context.interaction
     message = context.message
@@ -134,7 +135,7 @@ def play(query: str, runtime: ToolRuntime[Context]) -> str:
     async def defer_and_play():
         if interaction and not interaction.response.is_done():
             await interaction.response.defer()
-        return await _play_async(interaction_or_message, query)
+        return await _play_async(interaction_or_message, query, n)
     
     if isinstance(interaction_or_message, discord.Interaction):
         loop = interaction_or_message.client.loop
