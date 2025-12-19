@@ -25,7 +25,7 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
         return 'youtube.com' in parsed.netloc or 'youtu.be' in parsed.netloc
 
     @classmethod
-    async def from_url(self, url, *, loop=None, stream=False, n=1):
+    async def from_url(self, url, *, loop=None, stream=False, n=None):
         command = ["yt-dlp"]
         
         if self._is_youtube_url(url):
@@ -38,12 +38,13 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
         is_search = url.startswith('ytsearch')
         is_playlist = 'playlist' in url.lower() or 'list=' in url.lower()
         
-        if is_search:
-            limit = n
-        elif is_playlist:
-            limit = n
-        else:
-            limit = 1
+        if n is None:
+            if is_playlist:
+                n = 10
+            else:
+                n = 1
+        
+        limit = n
         
         last_error = None
         for format_selector in format_selectors:
