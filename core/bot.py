@@ -134,6 +134,31 @@ class MusicBot(commands.Cog):
         else:
             logger.warning(f"Database not available, could not add guild {guild.id} ({guild.name})")
 
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        if member.bot:
+            return
+        
+        guild = member.guild
+        if not guild:
+            return
+        
+        guild_id = guild.id
+        voice_client = guild.voice_client
+        
+        if not voice_client or not voice_client.is_connected():
+            return
+        
+        if voice_client.channel is None:
+            return
+        
+        members_in_channel = [m for m in voice_client.channel.members if not m.bot]
+        
+        if len(members_in_channel) == 0:
+            self.state.set_all_users_disconnected_time(guild_id, time.time())
+        else:
+            self.state.clear_all_users_disconnected_time(guild_id)
+
     def cog_unload(self):
         self.update_player_task.cancel()
         self.idle_check_task.cancel()
@@ -153,10 +178,13 @@ class MusicBot(commands.Cog):
         
         guild_id = guild.id
         queue = self.state.get_queue(guild_id)
+        voice_client = guild.voice_client
+        
         if len(queue) == 0:
-            voice_client = guild.voice_client
-            if voice_client and not voice_client.is_playing() and not voice_client.is_paused():
-                self.state.set_idle_start_time(guild_id, time.time())
+            if voice_client and voice_client.is_connected():
+                if not voice_client.is_playing() and not voice_client.is_paused():
+                    if not self.state.get_idle_start_time(guild_id):
+                        self.state.set_idle_start_time(guild_id, time.time())
             self.state.clear_player_message(guild_id)
             return
         
@@ -428,18 +456,16 @@ class MusicBot(commands.Cog):
         current_time = time.time()
         for guild_id in list(self.state._states.keys()):
             try:
-                idle_start = self.state.get_idle_start_time(guild_id)
-                if not idle_start:
-                    continue
-                
                 guild = self.bot.get_guild(guild_id)
                 if not guild:
                     self.state.clear_idle_start_time(guild_id)
+                    self.state.clear_all_users_disconnected_time(guild_id)
                     continue
                 
                 voice_client = guild.voice_client
-                if not voice_client:
+                if not voice_client or not voice_client.is_connected():
                     self.state.clear_idle_start_time(guild_id)
+                    self.state.clear_all_users_disconnected_time(guild_id)
                     continue
                 
                 queue = self.state.get_queue(guild_id)
@@ -449,14 +475,39 @@ class MusicBot(commands.Cog):
                     self.state.clear_idle_start_time(guild_id)
                     continue
                 
+                if voice_client.channel:
+                    members_in_channel = [m for m in voice_client.channel.members if not m.bot]
+                    if len(members_in_channel) == 0:
+                        all_users_disconnected_time = self.state.get_all_users_disconnected_time(guild_id)
+                        if not all_users_disconnected_time:
+                            self.state.set_all_users_disconnected_time(guild_id, current_time)
+                        else:
+                            disconnected_duration = current_time - all_users_disconnected_time
+                            if disconnected_duration >= 180:
+                                await voice_client.disconnect()
+                                self.state.clear_all_users_disconnected_time(guild_id)
+                                self.state.clear_idle_start_time(guild_id)
+                                logger.debug(construct_log(f"Disconnected from voice channel in guild {guild_id} after all users left for 3 minutes"))
+                                continue
+                    else:
+                        self.state.clear_all_users_disconnected_time(guild_id)
+                
+                idle_start = self.state.get_idle_start_time(guild_id)
+                if not idle_start:
+                    if not is_playing and len(queue) == 0:
+                        self.state.set_idle_start_time(guild_id, current_time)
+                    continue
+                
                 idle_duration = current_time - idle_start
                 if idle_duration >= 180:
                     await voice_client.disconnect()
                     self.state.clear_idle_start_time(guild_id)
+                    self.state.clear_all_users_disconnected_time(guild_id)
                     logger.debug(construct_log(f"Disconnected from voice channel in guild {guild_id} after 3 minutes of idle"))
             except Exception as e:
                 logger.error(construct_log(f"Error in idle check for guild {guild_id}: {e}"))
                 self.state.clear_idle_start_time(guild_id)
+                self.state.clear_all_users_disconnected_time(guild_id)
 
     @idle_check_task.before_loop
     async def before_idle_check_task(self):

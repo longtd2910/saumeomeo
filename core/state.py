@@ -13,6 +13,7 @@ class GuildState:
         self.player_message: Optional[discord.Message] = None
         self.player_interaction: Optional[discord.Interaction] = None
         self.idle_start_time: Optional[float] = None
+        self.all_users_disconnected_time: Optional[float] = None
 
 class MusicState:
     def __init__(self):
@@ -64,6 +65,15 @@ class MusicState:
     
     def clear_idle_start_time(self, guild_id: int):
         self.get_guild_state(guild_id).idle_start_time = None
+    
+    def get_all_users_disconnected_time(self, guild_id: int) -> Optional[float]:
+        return self.get_guild_state(guild_id).all_users_disconnected_time
+    
+    def set_all_users_disconnected_time(self, guild_id: int, time: Optional[float]):
+        self.get_guild_state(guild_id).all_users_disconnected_time = time
+    
+    def clear_all_users_disconnected_time(self, guild_id: int):
+        self.get_guild_state(guild_id).all_users_disconnected_time = None
     
     def clear_player_message(self, guild_id: int):
         state = self.get_guild_state(guild_id)
