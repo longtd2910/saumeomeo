@@ -176,6 +176,48 @@ class MusicBot(commands.Cog):
         
         voice_client = guild.voice_client
         
+        if not voice_client:
+            logger.error(f"Error in play_next: Not connected to voice.")
+            queue.insert(0, song)
+            try:
+                await interaction.followup.send(embed=discord.Embed(description="Lỗi: Bot không kết nối với kênh thoại. Vui lòng thử lại."))
+            except:
+                pass
+            return
+        
+        if not voice_client.is_connected():
+            logger.warning(f"Voice client exists but not connected. Attempting to reconnect...")
+            try:
+                target_channel = None
+                if voice_client.channel:
+                    target_channel = voice_client.channel
+                elif interaction.user and interaction.user.voice and interaction.user.voice.channel:
+                    target_channel = interaction.user.voice.channel
+                else:
+                    members_in_voice = [m for m in guild.members if m.voice and m.voice.channel]
+                    if members_in_voice:
+                        target_channel = members_in_voice[0].voice.channel
+                
+                if target_channel:
+                    try:
+                        await voice_client.disconnect()
+                    except:
+                        pass
+                    await target_channel.connect()
+                    voice_client = guild.voice_client
+                    if not voice_client or not voice_client.is_connected():
+                        raise Exception("Failed to establish connection")
+                else:
+                    raise Exception("No voice channel available to reconnect")
+            except Exception as e:
+                logger.error(f"Error in play_next: Failed to reconnect to voice channel: {e}")
+                queue.insert(0, song)
+                try:
+                    await interaction.followup.send(embed=discord.Embed(description="Lỗi: Bot không kết nối với kênh thoại. Vui lòng thử lại."))
+                except:
+                    pass
+                return
+        
         embed = construct_player_embed(
             song=song,
             voice_client=voice_client,
