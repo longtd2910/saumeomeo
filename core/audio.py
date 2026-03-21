@@ -1,37 +1,40 @@
 import asyncio
 import json
+import subprocess
+import sys
 from urllib.parse import urlparse
 
 import discord
 
 from .utils import format_duration
 
-_base_before = (
-    '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
-    '-reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx -nostdin'
-)
-
-_default_browser_headers = {
-    'User-Agent': (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-    ),
-    'Referer': 'https://www.youtube.com/',
-    'Origin': 'https://www.youtube.com',
-}
-
-ffmpeg_options = {
+ffmpeg_pipe_options = {
+    'before_options': '-thread_queue_size 512',
     'options': '-vn'
 }
 
+def _popen_ytdlp_stdout(cmd: list[str]) -> subprocess.Popen:
+    kwargs: dict = {
+        'stdout': subprocess.PIPE,
+        'stderr': subprocess.DEVNULL,
+    }
+    if sys.platform == 'win32':
+        kwargs['creationflags'] = 0x08000000
+    return subprocess.Popen(cmd, **kwargs)
 
-def _headers_for_ffmpeg(http_headers):
-    merged = dict(_default_browser_headers)
-    if http_headers:
-        merged.update(http_headers)
-    blob = '\r\n'.join(f'{k}: {v}' for k, v in merged.items()) + '\r\n'
-    safe = blob.replace('\\', '\\\\').replace('"', '\\"')
-    return f'{_base_before} -headers "{safe}"'
+class YtdlpPipeIntoFFmpegPCMAudio(discord.FFmpegPCMAudio):
+    def __init__(self, ytdlp_proc: subprocess.Popen, **kwargs):
+        self._ytdlp_proc = ytdlp_proc
+        super().__init__(ytdlp_proc.stdout, pipe=True, **kwargs)
+
+    def cleanup(self):
+        super().cleanup()
+        if self._ytdlp_proc.poll() is None:
+            self._ytdlp_proc.kill()
+        try:
+            self._ytdlp_proc.wait(timeout=3)
+        except Exception:
+            pass
 
 class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
@@ -44,6 +47,19 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
     def _is_youtube_url(cls, url):
         parsed = urlparse(url)
         return 'youtube.com' in parsed.netloc or 'youtu.be' in parsed.netloc
+
+    @classmethod
+    def _playback_url(cls, entry, query_url):
+        w = entry.get('webpage_url') or entry.get('original_url')
+        if w and not str(w).startswith('ytsearch:'):
+            return w
+        u = entry.get('url')
+        if u and ('youtube.com' in u or 'youtu.be' in u):
+            return u
+        vid = entry.get('id')
+        if isinstance(vid, str) and len(vid) == 11:
+            return f'https://www.youtube.com/watch?v={vid}'
+        return query_url
 
     @classmethod
     async def from_url(self, url, *, loop=None, stream=False, n=None):
@@ -93,25 +109,27 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
                     entries = entries[:limit]
                     results = []
                     for entry in entries:
-                        stream_url = entry.get('url')
-                        header_src = entry
-                        if not stream_url and entry.get('formats'):
-                            for fmt in reversed(entry['formats']):
-                                if fmt.get('url'):
-                                    stream_url = fmt.get('url')
-                                    header_src = fmt
-                                    break
-                        if not stream_url:
+                        play_url = self._playback_url(entry, url)
+                        if not play_url:
                             continue
-                        hdr = header_src.get('http_headers') or {}
+                        dl_cmd = ["yt-dlp"]
+                        if self._is_youtube_url(play_url):
+                            dl_cmd.extend(["--remote-components", "ejs:npm"])
+                        dl_cmd.extend([
+                            "-f", format_selector,
+                            "-o", "-",
+                            "--no-warnings",
+                            "--no-playlist",
+                            play_url,
+                        ])
+                        ytdlp_proc = await asyncio.to_thread(_popen_ytdlp_stdout, dl_cmd)
                         entry_url = entry.get('webpage_url') or entry.get('original_url') or url
                         if not entry_url or entry_url.startswith('ytsearch:'):
                             entry_url = entry.get('webpage_url') or url
                         audio_source = self(
-                            discord.FFmpegPCMAudio(
-                                stream_url,
-                                before_options=_headers_for_ffmpeg(hdr),
-                                options=ffmpeg_options['options'],
+                            YtdlpPipeIntoFFmpegPCMAudio(
+                                ytdlp_proc,
+                                **ffmpeg_pipe_options
                             ),
                             data={
                                 'title': entry.get('title', 'No title'),
