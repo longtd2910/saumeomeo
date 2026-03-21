@@ -6,7 +6,7 @@ from langchain.tools import tool
 import discord
 
 from .utils import resolve_link, validate_url, join_voice_channel
-from .audio import YoutubeDLAudioSource
+from .audio import YoutubeDLAudioSource, cleanup_source
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ async def skip_logic(
         songs_to_remove = skip_to_j - 1
         for _ in range(songs_to_remove):
             if len(queue) > 0:
-                queue.pop(0)
+                cleanup_source(queue.pop(0))
         
         voice_client.stop()
         if skip_to_j == 1:
@@ -60,7 +60,7 @@ async def skip_logic(
         
         for _ in range(songs_to_remove):
             if len(queue) > 0:
-                queue.pop(0)
+                cleanup_source(queue.pop(0))
         
         voice_client.stop()
         if skip_i == 1:

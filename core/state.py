@@ -81,7 +81,13 @@ class MusicState:
         state.player_interaction = None
     
     def clear_queue(self, guild_id: int):
-        self.get_guild_state(guild_id).queue = []
+        state = self.get_guild_state(guild_id)
+        for item in state.queue:
+            try:
+                item.cleanup()
+            except Exception:
+                pass
+        state.queue = []
     
     def remove_guild_state(self, guild_id: int):
         if guild_id in self._states:
