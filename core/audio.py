@@ -14,10 +14,12 @@ ffmpeg_file_options = {
 }
 
 YOUTUBE_STRATEGIES = [
-    ('bestaudio[protocol^=m3u8]/bestaudio/best', 'youtube:player_client=tv_embedded,web'),
-    ('bestaudio[protocol^=m3u8]/bestaudio/best', 'youtube:player_client=android_sdkless,web'),
+    ('bestaudio[protocol^=m3u8]/bestaudio/best', 'youtube:player_client=android,web'),
+    ('bestaudio/best', 'youtube:player_client=android,web'),
+    ('bestaudio[protocol^=m3u8]/bestaudio/best', 'youtube:player_client=web'),
     ('bestaudio/best', 'youtube:player_client=web'),
-    ('bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best', 'youtube:player_client=tv_embedded,web,mweb'),
+    ('bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best', 'youtube:player_client=android,web'),
+    ('bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best', 'youtube:player_client=web,mweb'),
     ('bestaudio/best', 'youtube:player_client=mweb,web'),
 ]
 
