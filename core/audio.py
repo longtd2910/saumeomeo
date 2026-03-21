@@ -13,6 +13,18 @@ ffmpeg_file_options = {
     'options': '-vn'
 }
 
+YOUTUBE_STRATEGIES = [
+    ('bestaudio[protocol^=m3u8]/bestaudio/best', 'youtube:player_client=tv_embedded,web'),
+    ('bestaudio[protocol^=m3u8]/bestaudio/best', 'youtube:player_client=android_sdkless,web'),
+    ('bestaudio/best', 'youtube:player_client=web'),
+    ('bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best', 'youtube:player_client=tv_embedded,web,mweb'),
+    ('bestaudio/best', 'youtube:player_client=mweb,web'),
+]
+
+DEFAULT_STRATEGIES = [
+    ('bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best', None),
+]
+
 
 def cleanup_source(source: discord.AudioSource) -> None:
     try:
@@ -55,12 +67,32 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
         return u
 
     @classmethod
-    async def _download_track(cls, entry_url: str, format_selector: str) -> tuple[str, str]:
+    def _youtube_opts(cls, extractor: str | None, use_impersonate: bool) -> list[str]:
+        opts = [
+            '--remote-components', 'ejs:npm',
+            '--force-ipv4',
+            '--extractor-retries', '3',
+            '--fragment-retries', '10',
+        ]
+        if use_impersonate:
+            opts.extend(['--impersonate', 'chrome'])
+        if extractor:
+            opts.extend(['--extractor-args', extractor])
+        return opts
+
+    @classmethod
+    async def _download_track(
+        cls,
+        entry_url: str,
+        format_selector: str,
+        youtube_extractor: str | None,
+        use_impersonate: bool,
+    ) -> tuple[str, str]:
         tmp_dir = tempfile.mkdtemp(prefix='saumeomeo_')
         out_tmpl = os.path.join(tmp_dir, 'audio.%(ext)s')
         cmd = ['yt-dlp']
         if cls._is_youtube_url(entry_url):
-            cmd.extend(['--remote-components', 'ejs:npm'])
+            cmd.extend(cls._youtube_opts(youtube_extractor, use_impersonate))
         cmd.extend([
             '-f', format_selector,
             '-o', out_tmpl,
@@ -89,15 +121,6 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
 
     @classmethod
     async def from_url(self, url, *, loop=None, stream=False, n=None):
-        command = ['yt-dlp']
-
-        if self._is_youtube_url(url):
-            command.extend(['--remote-components', 'ejs:npm'])
-
-        format_selectors = [
-            'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
-        ]
-
         is_playlist = 'playlist' in url.lower() or 'list=' in url.lower()
 
         if n is None:
@@ -108,26 +131,41 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
 
         limit = n
 
-        last_error = None
-        for format_selector in format_selectors:
-            cmd = command + [
-                '--dump-single-json',
-                '--playlist-end',
-                str(limit),
-                '--no-warnings',
-                '-f',
-                format_selector,
-                url,
+        if self._is_youtube_url(url):
+            strategy_loops = [
+                (True, YOUTUBE_STRATEGIES),
+                (False, YOUTUBE_STRATEGIES),
             ]
+        else:
+            strategy_loops = [(False, DEFAULT_STRATEGIES)]
 
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await process.communicate()
+        last_error = None
+        for use_impersonate, strategies in strategy_loops:
+            for format_selector, youtube_extractor in strategies:
+                cmd = ['yt-dlp']
+                if self._is_youtube_url(url):
+                    cmd.extend(self._youtube_opts(youtube_extractor, use_impersonate))
+                cmd.extend([
+                    '--dump-single-json',
+                    '--playlist-end',
+                    str(limit),
+                    '--no-warnings',
+                    '-f',
+                    format_selector,
+                    url,
+                ])
 
-            if process.returncode == 0:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+
+                if process.returncode != 0:
+                    last_error = stderr.decode() if stderr else 'yt-dlp failed'
+                    continue
+
                 try:
                     data = json.loads(stdout.decode())
                     entries = data['entries'] if 'entries' in data else [data]
@@ -139,7 +177,12 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
                         if not entry_url:
                             continue
                         try:
-                            path, tmp_dir = await self._download_track(entry_url, format_selector)
+                            path, tmp_dir = await self._download_track(
+                                entry_url,
+                                format_selector,
+                                youtube_extractor,
+                                use_impersonate,
+                            )
                         except RuntimeError as e:
                             last_error = str(e)
                             for r in results:
@@ -167,12 +210,5 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
                 except (json.JSONDecodeError, KeyError) as e:
                     last_error = f'Failed to parse yt-dlp output: {e}'
                     continue
-                continue
-
-            error_msg = stderr.decode() if stderr else 'yt-dlp failed'
-            if 'Requested format is not available' not in error_msg:
-                last_error = error_msg
-                break
-            last_error = error_msg
 
         raise RuntimeError(last_error or 'yt-dlp failed with all format selectors')
