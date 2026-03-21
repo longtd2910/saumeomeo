@@ -1,16 +1,37 @@
 import asyncio
 import json
-import os
 from urllib.parse import urlparse
 
 import discord
 
 from .utils import format_duration
 
+_base_before = (
+    '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 '
+    '-reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx -nostdin'
+)
+
+_default_browser_headers = {
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    ),
+    'Referer': 'https://www.youtube.com/',
+    'Origin': 'https://www.youtube.com',
+}
+
 ffmpeg_options = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -reconnect_on_network_error 1 -reconnect_on_http_error 4xx,5xx',
     'options': '-vn'
 }
+
+
+def _headers_for_ffmpeg(http_headers):
+    merged = dict(_default_browser_headers)
+    if http_headers:
+        merged.update(http_headers)
+    blob = '\r\n'.join(f'{k}: {v}' for k, v in merged.items()) + '\r\n'
+    safe = blob.replace('\\', '\\\\').replace('"', '\\"')
+    return f'{_base_before} -headers "{safe}"'
 
 class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
@@ -73,20 +94,24 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
                     results = []
                     for entry in entries:
                         stream_url = entry.get('url')
+                        header_src = entry
                         if not stream_url and entry.get('formats'):
                             for fmt in reversed(entry['formats']):
                                 if fmt.get('url'):
                                     stream_url = fmt.get('url')
+                                    header_src = fmt
                                     break
                         if not stream_url:
                             continue
+                        hdr = header_src.get('http_headers') or {}
                         entry_url = entry.get('webpage_url') or entry.get('original_url') or url
                         if not entry_url or entry_url.startswith('ytsearch:'):
                             entry_url = entry.get('webpage_url') or url
                         audio_source = self(
                             discord.FFmpegPCMAudio(
                                 stream_url,
-                                **ffmpeg_options
+                                before_options=_headers_for_ffmpeg(hdr),
+                                options=ffmpeg_options['options'],
                             ),
                             data={
                                 'title': entry.get('title', 'No title'),
