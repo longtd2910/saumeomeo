@@ -9,7 +9,7 @@ import discord
 from .utils import format_duration
 
 ffmpeg_pipe_options = {
-    'before_options': '-thread_queue_size 512',
+    'before_options': '-thread_queue_size 2048 -probesize 32M -analyzeduration 32M',
     'options': '-vn'
 }
 
@@ -17,6 +17,7 @@ def _popen_ytdlp_stdout(cmd: list[str]) -> subprocess.Popen:
     kwargs: dict = {
         'stdout': subprocess.PIPE,
         'stderr': subprocess.DEVNULL,
+        'bufsize': 0,
     }
     if sys.platform == 'win32':
         kwargs['creationflags'] = 0x08000000
@@ -69,7 +70,7 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
             command.extend(["--remote-components", "ejs:npm"])
         
         format_selectors = [
-            "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+            "bestaudio[ext=webm]/bestaudio[ext=opus]/bestaudio[ext=m4a]/bestaudio/best",
         ]
         
         is_search = url.startswith('ytsearch')
@@ -84,8 +85,9 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
         limit = n
         
         last_error = None
+        format_sort = ["--format-sort", "+proto"]
         for format_selector in format_selectors:
-            cmd = command + [
+            cmd = command + format_sort + [
                 "--dump-single-json",
                 "--playlist-end",
                 str(limit),
@@ -115,7 +117,7 @@ class YoutubeDLAudioSource(discord.PCMVolumeTransformer):
                         dl_cmd = ["yt-dlp"]
                         if self._is_youtube_url(play_url):
                             dl_cmd.extend(["--remote-components", "ejs:npm"])
-                        dl_cmd.extend([
+                        dl_cmd.extend(format_sort + [
                             "-f", format_selector,
                             "-o", "-",
                             "--no-warnings",
