@@ -24,6 +24,7 @@ from .controller import (
 from agent.llm import LlmProvider
 from agent.embedding import EmbeddingClient
 from agent.memory import SemanticMemoryManager
+from .remote_chat import analyst_chat_reply
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +120,9 @@ class MusicBot(commands.Cog):
     async def on_message(self, message: discord.Message):
         if self.bot.user in message.mentions:
             content = re.sub(r'<@!?\d+>', '', message.content).strip()
-            response = await self.llm.handle_message(content, interaction=None, message_obj=message)
-            if response is not None:
-                await message.channel.send(response)
+            response = await analyst_chat_reply(content)
+            for i in range(0, len(response), 2000):
+                await message.channel.send(response[i : i + 2000])
         
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
