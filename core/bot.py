@@ -120,7 +120,8 @@ class MusicBot(commands.Cog):
     async def on_message(self, message: discord.Message):
         if self.bot.user in message.mentions:
             content = re.sub(r'<@!?\d+>', '', message.content).strip()
-            response = await analyst_chat_reply(content)
+            async with message.channel.typing():
+                response = await analyst_chat_reply(content)
             for i in range(0, len(response), 2000):
                 await message.channel.send(response[i : i + 2000])
         
