@@ -326,7 +326,7 @@ class MusicBot(commands.Cog):
 
     @app_commands.command(name='play', description='Hát')
     @app_commands.describe(url='URL hoặc tên bài hát (hoặc "personal" để phát playlist)', n='Số lượng bài hát muốn phát từ query hoặc playlist (mặc định: 1)')
-    async def commands_play(self, interaction: discord.Interaction, url: str = None, n: int = 1):
+    async def commands_play(self, interaction: discord.Interaction, url: str, n: int = 1):
         await interaction.response.defer()
         await play_logic(
             interaction,
