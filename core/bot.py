@@ -25,6 +25,7 @@ from agent.llm import LlmProvider
 from agent.embedding import EmbeddingClient
 from agent.memory import SemanticMemoryManager
 from .remote_chat import analyst_chat_reply
+from .joke import JokeDuty, JokeDutyError, JOKE_GUILD_ID, JOKE_TIMES
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +38,10 @@ class MusicBot(commands.Cog):
         self.embedding_client = EmbeddingClient()
         self.memory_manager = SemanticMemoryManager(self.embedding_client, self.db)
         self.llm = LlmProvider(memory_manager=self.memory_manager, db=self.db)
+        self.joke = JokeDuty(bot, self.db)
         self.update_player_task.start()
         self.idle_check_task.start()
+        self.joke_task.start()
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -164,6 +167,7 @@ class MusicBot(commands.Cog):
     def cog_unload(self):
         self.update_player_task.cancel()
         self.idle_check_task.cancel()
+        self.joke_task.cancel()
         if self.bot.loop and not self.bot.loop.is_closed():
             asyncio.run_coroutine_threadsafe(self.db.close(), self.bot.loop)
 
@@ -546,6 +550,38 @@ class MusicBot(commands.Cog):
     async def commands_play_playlist(self, interaction: discord.Interaction):
         """Play user's personal playlist"""
         await self.commands_play.callback(self, interaction, url="personal")
+
+    @tasks.loop(time=JOKE_TIMES)
+    async def joke_task(self):
+        try:
+            member = await self.joke.announce()
+            logger.info(construct_log(f"Joke duty picked {member.id}"))
+        except Exception as e:
+            logger.error(construct_log(f"Joke duty failed: {e}"))
+
+    @joke_task.before_loop
+    async def before_joke_task(self):
+        await self.bot.wait_until_ready()
+
+    @app_commands.command(name='request-joke', description='Chọn người gửi joke hôm nay')
+    async def commands_request_joke(self, interaction: discord.Interaction):
+        if interaction.guild_id != JOKE_GUILD_ID:
+            await interaction.response.send_message(
+                "Lệnh này chỉ dùng ở server joke.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            member = await self.joke.announce()
+        except JokeDutyError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+            return
+        except Exception as e:
+            logger.error(construct_log(f"request-joke failed: {e}"))
+            await interaction.followup.send("Không chọn được người gửi joke.", ephemeral=True)
+            return
+        await interaction.followup.send(f"Đã gọi {member.mention}.", ephemeral=True)
 
     @app_commands.command(name='random', description='Phát bài hát ngẫu nhiên từ lịch sử của server')
     @app_commands.describe(number_of_urls='Số lượng bài hát muốn phát (mặc định: 1)')

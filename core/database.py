@@ -119,6 +119,18 @@ class PlaylistDatabase:
                 CREATE INDEX IF NOT EXISTS idx_chat_history_guild_channel 
                 ON chat_history(guild_id, channel_id)
             """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS joke_announcements (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT NOT NULL UNIQUE,
+                    channel_id BIGINT NOT NULL,
+                    message_id BIGINT,
+                    user_id BIGINT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    deleted_at TIMESTAMP
+                )
+            """)
 
     async def add_song(self, user_id: int, url: str, title: Optional[str] = None) -> bool:
         if not self.pool:
@@ -403,6 +415,41 @@ class PlaylistDatabase:
         except Exception as e:
             logger.error(f"Error getting recent channel messages: {e}")
             return []
+
+    async def get_joke_announcement(self, guild_id: int) -> Optional[Dict]:
+        if not self.pool:
+            return None
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow("""
+                    SELECT channel_id, message_id, user_id
+                    FROM joke_announcements
+                    WHERE guild_id = $1 AND deleted_at IS NULL
+                """, guild_id)
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"Error getting joke announcement: {e}")
+            return None
+
+    async def save_joke_announcement(self, guild_id: int, channel_id: int, message_id: int, user_id: int) -> bool:
+        if not self.pool:
+            return False
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute("""
+                    INSERT INTO joke_announcements (guild_id, channel_id, message_id, user_id)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (guild_id) DO UPDATE SET
+                        channel_id = EXCLUDED.channel_id,
+                        message_id = EXCLUDED.message_id,
+                        user_id = EXCLUDED.user_id,
+                        updated_at = CURRENT_TIMESTAMP,
+                        deleted_at = NULL
+                """, guild_id, channel_id, message_id, user_id)
+                return True
+        except Exception as e:
+            logger.error(f"Error saving joke announcement: {e}")
+            return False
 
     async def update_message_embedding(self, message_id: int, embedding: List[float]) -> bool:
         if not self.pool:
