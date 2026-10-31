@@ -12,8 +12,8 @@ JOKE_SOURCE_CHANNEL_ID = 766281059632545824
 JOKE_ANNOUNCE_CHANNEL_ID = 1564687128833556620
 VN_TZ = datetime.timezone(datetime.timedelta(hours=7))
 JOKE_TIMES = [
-    datetime.time(13, 0, tzinfo=VN_TZ),
-    datetime.time(20, 0, tzinfo=VN_TZ),
+    datetime.time(1, 0, tzinfo=VN_TZ),
+    datetime.time(8, 0, tzinfo=VN_TZ),
 ]
 
 
@@ -35,6 +35,20 @@ def choose_member(members, last_user_id, rng=None):
         return None
     fresh = [member for member in pool if member.id != last_user_id]
     return rng.choice(fresh or pool)
+
+
+def find_member(members, user_id):
+    if user_id is None:
+        return None
+    for member in eligible_members(members):
+        if member.id == user_id:
+            return member
+    return None
+
+
+def is_reannounce_slot(now=None):
+    current = now or datetime.datetime.now(VN_TZ)
+    return current.hour == 8
 
 
 def joke_card(member: discord.Member) -> discord.ui.LayoutView:
@@ -68,14 +82,15 @@ class JokeDuty:
         self.db = db
         self._message_id = None
         self._user_id = None
+        self._assigned_on = None
         self._loaded = False
         self._lock = asyncio.Lock()
 
-    async def announce(self) -> discord.Member:
+    async def announce(self, *, repeat: bool = False) -> discord.Member:
         async with self._lock:
-            return await self._announce()
+            return await self._announce(repeat)
 
-    async def _announce(self) -> discord.Member:
+    async def _announce(self, repeat: bool) -> discord.Member:
         guild = self.bot.get_guild(JOKE_GUILD_ID)
         if guild is None:
             raise JokeDutyError("Bot không ở trong server joke.")
@@ -92,11 +107,21 @@ class JokeDuty:
             if source.permissions_for(member).view_channel
         ]
         await self._load_last()
-        member = choose_member(viewers, self._user_id)
+        today = datetime.datetime.now(VN_TZ).date()
+        member = find_member(viewers, self._user_id) if repeat and self._assigned_on == today else None
+        repeated = member is not None
         if member is None:
-            raise JokeDutyError("Không có ai trong kênh đủ điều kiện gửi joke.")
+            member = choose_member(viewers, self._user_id)
+            if member is None:
+                raise JokeDutyError("Không có ai trong kênh đủ điều kiện gửi joke.")
+            self._assigned_on = today
 
-        logger.info("Joke pool %s viewers, picked %s", len(viewers), member.id)
+        logger.info(
+            "Joke pool %s viewers, %s %s",
+            len(viewers),
+            "reannounced" if repeated else "picked",
+            member.id,
+        )
 
         message = await announce.send(
             view=joke_card(member),
@@ -107,7 +132,7 @@ class JokeDuty:
         self._user_id = member.id
         if self.db.pool:
             await self.db.save_joke_announcement(
-                JOKE_GUILD_ID, announce.id, message.id, member.id
+                JOKE_GUILD_ID, announce.id, message.id, member.id, self._assigned_on
             )
         if previous_id and previous_id != message.id:
             await self._delete_message(announce, previous_id)
@@ -130,6 +155,10 @@ class JokeDuty:
             return
         self._message_id = row.get("message_id")
         self._user_id = row.get("user_id")
+        assigned_on = row.get("assigned_on")
+        if isinstance(assigned_on, datetime.datetime):
+            assigned_on = assigned_on.date()
+        self._assigned_on = assigned_on
 
     async def _delete_message(self, channel, message_id):
         try:

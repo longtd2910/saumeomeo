@@ -25,7 +25,7 @@ from agent.llm import LlmProvider
 from agent.embedding import EmbeddingClient
 from agent.memory import SemanticMemoryManager
 from .remote_chat import analyst_chat_reply
-from .joke import JokeDuty, JokeDutyError, JOKE_GUILD_ID, JOKE_TIMES
+from .joke import JokeDuty, JokeDutyError, JOKE_GUILD_ID, JOKE_TIMES, is_reannounce_slot
 
 logger = logging.getLogger(__name__)
 
@@ -554,8 +554,8 @@ class MusicBot(commands.Cog):
     @tasks.loop(time=JOKE_TIMES)
     async def joke_task(self):
         try:
-            member = await self.joke.announce()
-            logger.info(construct_log(f"Joke duty picked {member.id}"))
+            member = await self.joke.announce(repeat=is_reannounce_slot())
+            logger.info(construct_log(f"Joke duty announced {member.id}"))
         except Exception as e:
             logger.error(construct_log(f"Joke duty failed: {e}"))
 

@@ -128,8 +128,13 @@ class PlaylistDatabase:
                     user_id BIGINT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    deleted_at TIMESTAMP
+                    deleted_at TIMESTAMP,
+                    assigned_on DATE
                 )
+            """)
+            await conn.execute("""
+                ALTER TABLE joke_announcements
+                ADD COLUMN IF NOT EXISTS assigned_on DATE
             """)
 
     async def add_song(self, user_id: int, url: str, title: Optional[str] = None) -> bool:
@@ -422,7 +427,7 @@ class PlaylistDatabase:
         try:
             async with self.pool.acquire() as conn:
                 row = await conn.fetchrow("""
-                    SELECT channel_id, message_id, user_id
+                    SELECT channel_id, message_id, user_id, assigned_on
                     FROM joke_announcements
                     WHERE guild_id = $1 AND deleted_at IS NULL
                 """, guild_id)
@@ -431,21 +436,22 @@ class PlaylistDatabase:
             logger.error(f"Error getting joke announcement: {e}")
             return None
 
-    async def save_joke_announcement(self, guild_id: int, channel_id: int, message_id: int, user_id: int) -> bool:
+    async def save_joke_announcement(self, guild_id: int, channel_id: int, message_id: int, user_id: int, assigned_on) -> bool:
         if not self.pool:
             return False
         try:
             async with self.pool.acquire() as conn:
                 await conn.execute("""
-                    INSERT INTO joke_announcements (guild_id, channel_id, message_id, user_id)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO joke_announcements (guild_id, channel_id, message_id, user_id, assigned_on)
+                    VALUES ($1, $2, $3, $4, $5)
                     ON CONFLICT (guild_id) DO UPDATE SET
                         channel_id = EXCLUDED.channel_id,
                         message_id = EXCLUDED.message_id,
                         user_id = EXCLUDED.user_id,
+                        assigned_on = EXCLUDED.assigned_on,
                         updated_at = CURRENT_TIMESTAMP,
                         deleted_at = NULL
-                """, guild_id, channel_id, message_id, user_id)
+                """, guild_id, channel_id, message_id, user_id, assigned_on)
                 return True
         except Exception as e:
             logger.error(f"Error saving joke announcement: {e}")
